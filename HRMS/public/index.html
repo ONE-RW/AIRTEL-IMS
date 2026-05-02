@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="theme-color" content="#d71920" />
+    <title>Airtel HRMS</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="auth-shell" id="auth-shell">
+      <div class="auth-card">
+        <section class="auth-brand-panel">
+          <div class="brand-lockup">
+            <img class="brand-logo" src="/airtel-logo.png" alt="Airtel" />
+            <div>
+              <p class="eyebrow">Airtel</p>
+              <h1>HRMS</h1>
+            </div>
+          </div>
+
+          <div class="auth-brand-copy">
+            <p class="eyebrow">Secure Access Portal</p>
+            <h2>Sign in to Airtel HRMS</h2>
+            <p class="lede">Access your employee management workspace.</p>
+          </div>
+
+          <div class="auth-feature-strip">
+            <article class="auth-feature-card">
+              <span class="auth-feature-label">Access</span>
+              <strong>HR Recruitment Officer only</strong>
+            </article>
+            <article class="auth-feature-card">
+              <span class="auth-feature-label">Integration</span>
+              <strong>API and SSO with IMS</strong>
+            </article>
+          </div>
+
+          <div class="role-preview-grid">
+            <article class="role-preview-card">
+              <span class="role-preview-kicker">HR</span>
+              <strong>HR Recruitment Officer</strong>
+              <p>Register, edit, delete, and manage employee source records.</p>
+            </article>
+          </div>
+
+          <div class="security-strip">
+            <strong>Only the HR Recruitment Officer can access the HRMS dashboard.</strong>
+          </div>
+        </section>
+
+        <section class="auth-form-panel">
+          <div class="auth-form-header">
+            <p class="eyebrow">Sign In</p>
+            <h3>Welcome back</h3>
+            <p>Use your IMS credentials to open the HRMS workspace.</p>
+          </div>
+
+          <form class="login-form" id="login-form">
+            <label class="field">
+              <span>Email or phone number</span>
+              <input id="login-email" type="text" placeholder="name@airtel.com or +2507..." autocomplete="username" required />
+            </label>
+
+            <label class="field">
+              <span>Enter Password</span>
+              <div class="password-field">
+                <input id="login-password" type="password" placeholder="Enter password" autocomplete="current-password" required />
+                <button class="password-toggle" id="password-toggle" type="button" aria-label="Show password">Show</button>
+              </div>
+            </label>
+
+            <div class="auth-inline-row">
+              <span class="auth-inline-note">Single sign-on ready for HRMS and IMS.</span>
+              <span class="auth-inline-link">Password help from IMS</span>
+            </div>
+
+            <button class="primary-btn submit-btn auth-login-btn" type="submit">Login</button>
+            <p class="status-text" id="login-hint">Access is limited to the HR Recruitment Officer.</p>
+          </form>
+
+          <div class="login-help-card">
+            <p class="eyebrow">Workspace</p>
+            <ul class="plain-list">
+              <li>HR manages employee source records in HRMS.</li>
+              <li>IMS consumes employee information through API in read-only mode.</li>
+            </ul>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div class="dashboard-shell hidden" id="dashboard-shell">
+      <button class="sidebar-backdrop hidden" id="sidebar-backdrop" type="button" aria-label="Close menu"></button>
+
+      <aside class="dashboard-sidebar" id="dashboard-sidebar">
+        <div class="sidebar-brand">
+          <div class="logo-lockup">
+            <img class="logo-image" src="/airtel-logo.png" alt="Airtel" />
+          </div>
+        </div>
+
+        <div class="sidebar-user">
+          <strong id="sidebar-actor-name">User</strong>
+          <span id="sidebar-actor-role">role</span>
+        </div>
+
+        <nav class="sidebar-nav">
+          <section class="sidebar-group">
+            <button class="sidebar-group-button" id="group-workspace-toggle" type="button" aria-expanded="true">
+              <span class="sidebar-group-title">
+                <span class="sidebar-icon" data-icon="dashboard"></span>
+                <span>Dashboard</span>
+              </span>
+              <span class="sidebar-chevron is-open" id="group-workspace-chevron">&#8964;</span>
+            </button>
+            <div class="sidebar-group-links is-open" id="group-workspace-links">
+              <button class="sidebar-link sidebar-link-button is-active" data-section-target="overview" type="button">
+                <span class="sidebar-link-icon" data-icon="dashboard"></span>
+                <span class="sidebar-link-label">Overview</span>
+              </button>
+              <button class="sidebar-link sidebar-link-button" data-section-target="directory" type="button">
+                <span class="sidebar-link-icon" data-icon="users"></span>
+                <span class="sidebar-link-label">Users</span>
+              </button>
+              <button class="sidebar-link sidebar-link-button" data-section-target="inspector" type="button">
+                <span class="sidebar-link-icon" data-icon="search"></span>
+                <span class="sidebar-link-label">Inspector</span>
+              </button>
+              <a class="sidebar-link" href="http://127.0.0.1:5173/hrms#returns" target="_blank" rel="noreferrer">
+                <span class="sidebar-link-icon" data-icon="approvals"></span>
+                <span class="sidebar-link-label">Returns (IMS)</span>
+              </a>
+            </div>
+          </section>
+
+          <section class="sidebar-group" id="sidebar-management-group">
+            <button class="sidebar-group-button" id="group-management-toggle" type="button" aria-expanded="true">
+              <span class="sidebar-group-title">
+                <span class="sidebar-icon" data-icon="settings"></span>
+                <span>Employee Settings</span>
+              </span>
+              <span class="sidebar-chevron is-open" id="group-management-chevron">&#8964;</span>
+            </button>
+            <div class="sidebar-group-links is-open" id="group-management-links">
+              <button class="sidebar-link sidebar-link-button" id="sidebar-register-link" data-section-target="register" type="button">
+                <span class="sidebar-link-icon" data-icon="plus"></span>
+                <span class="sidebar-link-label">Register Employee</span>
+              </button>
+            </div>
+          </section>
+        </nav>
+      </aside>
+
+      <div class="dashboard-stage">
+        <header class="dashboard-topbar">
+          <div class="dashboard-topbar-left">
+            <button class="menu-badge" id="sidebar-toggle" type="button" aria-label="Toggle menu">=</button>
+            <h1>Airtel Human Resource Management System</h1>
+          </div>
+          <div class="dashboard-topbar-right">
+            <div class="user-menu-shell">
+              <button class="user-menu-trigger" id="user-menu-trigger" type="button" aria-label="User menu">
+                <span class="user-avatar" id="masthead-avatar">HR</span>
+              </button>
+              <div class="user-menu-dropdown hidden" id="user-menu-dropdown" role="menu" aria-label="User menu">
+                <button class="user-menu-item" id="user-menu-profile" type="button" role="menuitem">Profile</button>
+                <button class="user-menu-item" id="user-menu-logout" type="button" role="menuitem">Logout</button>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <div class="profile-panel hidden" id="profile-panel" aria-live="polite">
+          <div class="profile-panel-inner">
+            <div class="profile-panel-header">
+              <div>
+                <h3>My IMS profile</h3>
+                <p>Latest profile details retrieved from IMS.</p>
+              </div>
+              <button type="button" class="close-panel-btn" id="profile-panel-close" aria-label="Close profile panel">×</button>
+            </div>
+            <div class="profile-panel-content" id="profile-panel-content"></div>
+          </div>
+        </div>
+
+        <main class="dashboard-content">
+          <div class="dashboard-heading-row">
+            <div>
+              <h2 id="topbar-title">Dashboard</h2>
+              <p class="dashboard-subtitle" id="overview-copy">Employee records and IMS readiness in one workspace.</p>
+            </div>
+            <div class="dashboard-breadcrumb">
+              <span>Home</span>
+              <span>/</span>
+              <span id="dashboard-chip-label">HRMS Dashboard</span>
+              <span>/</span>
+              <span id="dashboard-breadcrumb-current">Overview</span>
+            </div>
+          </div>
+
+          <div class="section-view-shell">
+            <section class="section-view" id="section-overview">
+              <div class="dashboard-card-grid" id="overview-grid">
+                <article class="dashboard-metric-card featured-metric-card">
+                  <div class="metric-card-head">
+                    <p class="metric-kicker">Loading overview</p>
+                  </div>
+                  <strong>0</strong>
+                </article>
+              </div>
+              <div class="overview-insights-grid" id="overview-insights"></div>
+            </section>
+
+            <section class="section-view hidden" id="section-directory">
+              <section class="dashboard-panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">Employee Directory</p>
+                    <h3>Employee directory</h3>
+                  </div>
+                  <button class="secondary-btn compact-btn" id="refresh-dashboard" type="button">Refresh</button>
+                </div>
+
+                <div class="panel-toolbar">
+                  <input id="employee-search" type="search" placeholder="Search by name, email, employee code, department, role" />
+                  <select id="employee-filter">
+                    <option value="all">All employees</option>
+                    <option value="active">Active only</option>
+                    <option value="inactive">Inactive only</option>
+                    <option value="pending">Pending only</option>
+                  </select>
+                </div>
+
+                <div class="directory-summary">
+                  <span class="directory-pill" id="directory-count-pill">0 employees loaded</span>
+                  <span class="directory-pill directory-pill-muted">Select an employee to inspect device fit</span>
+                </div>
+
+                <p class="status-text" id="directory-hint">Select an employee to inspect details and device fit.</p>
+                <div class="employee-list" id="employee-list"></div>
+              </section>
+            </section>
+
+            <section class="section-view hidden" id="section-inspector">
+              <section class="dashboard-panel inspector-panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">Employee Inspector</p>
+                    <h3>Employee profile and device fit</h3>
+                  </div>
+                </div>
+
+                <div class="inspector-empty" id="employee-inspector-empty">
+                  <strong>Select an employee</strong>
+                  <p>Inspect employee details and the recommended device profile.</p>
+                </div>
+
+                <div class="inspector-content hidden" id="employee-inspector">
+                  <div class="inspector-hero">
+                    <div>
+                      <h3 id="inspector-name">Employee Name</h3>
+                      <p id="inspector-subtitle">Role and contact</p>
+                    </div>
+                    <span class="role-chip" id="inspector-status">Active</span>
+                  </div>
+
+                  <div class="detail-grid" id="inspector-details"></div>
+
+                  <div class="recommendation-card">
+                    <p class="eyebrow">Recommended Device</p>
+                    <h4 id="inspector-device">Standard office laptop</h4>
+                    <p id="inspector-reason">Recommendation reason.</p>
+                  </div>
+
+                  <div class="action-note-card">
+                    <p class="eyebrow">Next Step</p>
+                    <p id="inspector-next-step">Use this employee context in IMS.</p>
+                  </div>
+                </div>
+              </section>
+            </section>
+
+            <section class="section-view hidden" id="section-register">
+              <section class="dashboard-panel" id="register-panel">
+                <div class="panel-header" id="register">
+                  <div>
+                    <p class="eyebrow">Recruitment Action</p>
+                    <h3 id="employee-form-title">Register employee</h3>
+                  </div>
+                  <button class="secondary-btn compact-btn hidden" id="cancel-edit" type="button">Cancel edit</button>
+                </div>
+
+                <div class="register-layout">
+                  <form class="employee-form" id="employee-form">
+                    <div class="field-grid">
+                      <label class="field"><span>First name</span><input name="firstName" maxlength="40" required /></label>
+                      <label class="field"><span>Last name</span><input name="lastName" maxlength="40" required /></label>
+                      <label class="field"><span>Email</span><input name="email" type="email" required /></label>
+                      <label class="field"><span>Phone number</span><input name="phoneNumber" maxlength="13" /></label>
+                      <label class="field">
+                        <span>Employee code</span>
+                        <input name="employeeCode" maxlength="40" readonly placeholder="Auto-generated when saved" />
+                      </label>
+                      <label class="field">
+                        <span>HRMS employee ID</span>
+                        <input name="hrmsEmployeeId" maxlength="40" readonly placeholder="Auto-generated when saved" />
+                      </label>
+                      <label class="field"><span>Job title</span><input name="jobTitle" maxlength="120" /></label>
+                      <label class="field"><span>HRMS account status</span>
+                        <select name="status">
+                          <option value="active">Active</option>
+                          <option value="pending">Pending</option>
+                          <option value="inactive">Inactive</option>
+                        </select>
+                        <span class="field-note">Account status controls whether the HRMS record is active in the system.</span>
+                      </label>
+                      <label class="field"><span>Office location</span><input name="officeLocation" maxlength="180" /></label>
+                      <label class="field"><span>Department name</span><input name="departmentName" maxlength="40" /></label>
+                      <label class="field"><span>Start date</span><input name="startDate" type="date" /></label>
+                    </div>
+
+                    <div class="form-actions">
+                      <button class="primary-btn" type="submit" id="employee-submit">Save employee</button>
+                    </div>
+                    <p class="status-text" id="employee-message">The HR Recruitment Officer can register and update employee source records here.</p>
+                  </form>
+
+                  <aside class="register-help-card">
+                    <p class="eyebrow">Checklist</p>
+                    <ul class="plain-list">
+                      <li>Register the employee in HRMS first.</li>
+                      <li>Keep job title and department accurate.</li>
+                      <li>Use HRMS account status for system activation and login state.</li>
+                      <li>Use employment status for the employee's HR/work state.</li>
+                    </ul>
+                  </aside>
+                </div>
+              </section>
+            </section>
+          </div>
+        </main>
+
+        <footer class="dashboard-footer">
+          <p>Copyright 2026 Airtel HRMS. All rights reserved.</p>
+          <span>Version 1.0.0</span>
+        </footer>
+      </div>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "name": "airtel-hrms",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "backend"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace backend",
+    "start": "npm run start --workspace backend"
+  }
+}

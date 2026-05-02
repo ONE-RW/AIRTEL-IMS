@@ -1,0 +1,125 @@
+{
+  "intents": [
+    {
+      "tag": "help",
+      "patterns": [
+        "help",
+        "what can you do",
+        "how can you help me",
+        "show me what you can answer",
+        "what should i ask",
+        "assist me"
+      ]
+    },
+    {
+      "tag": "workflow_help",
+      "patterns": [
+        "how does the request workflow work",
+        "explain the workflow",
+        "show request steps",
+        "how do approvals work",
+        "explain device request flow",
+        "what are the request stages"
+      ]
+    },
+    {
+      "tag": "find_equipment",
+      "patterns": [
+        "find asset TAG-102",
+        "look up serial number ABC123",
+        "search for device dell latitude",
+        "where is asset LT-442",
+        "find equipment by asset tag",
+        "locate serial number"
+      ]
+    },
+    {
+      "tag": "maintenance_summary",
+      "patterns": [
+        "show assets under maintenance",
+        "maintenance summary",
+        "what is under repair",
+        "list maintenance devices",
+        "maintenance workload",
+        "devices being repaired"
+      ]
+    },
+    {
+      "tag": "issue_summary",
+      "patterns": [
+        "summarize open issues",
+        "show unresolved issues",
+        "what issues are open",
+        "list high priority issues",
+        "issue summary",
+        "open incident list"
+      ]
+    },
+    {
+      "tag": "returns_status",
+      "patterns": [
+        "return status",
+        "show return requests",
+        "how do i return a device",
+        "recent returns",
+        "list pending returns",
+        "my return requests"
+      ]
+    },
+    {
+      "tag": "available_stock",
+      "patterns": [
+        "how many devices are available",
+        "show available stock",
+        "available laptops in my branch",
+        "stock availability",
+        "what is in stock",
+        "available assets"
+      ]
+    },
+    {
+      "tag": "pending_approvals",
+      "patterns": [
+        "what requests are waiting for approval",
+        "pending approvals",
+        "show approval queue",
+        "requests waiting for it approval",
+        "requests waiting for hr approval",
+        "who needs approval"
+      ]
+    },
+    {
+      "tag": "my_requests",
+      "patterns": [
+        "what is the status of my request",
+        "my requests",
+        "track my request",
+        "show my submitted requests",
+        "request status for me",
+        "did my request get approved"
+      ]
+    },
+    {
+      "tag": "my_assignments",
+      "patterns": [
+        "which devices are assigned to me",
+        "my assigned devices",
+        "show my equipment",
+        "what do i have assigned",
+        "my laptop assignment",
+        "assigned assets for me"
+      ]
+    },
+    {
+      "tag": "inventory_summary",
+      "patterns": [
+        "summarize inventory status",
+        "inventory summary",
+        "overall asset summary",
+        "equipment overview",
+        "how many assets do we have",
+        "stock summary"
+      ]
+    }
+  ]
+}
