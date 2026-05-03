@@ -1,12 +1,9 @@
-import type { LucideIcon } from "lucide-react";
 import { ArrowRight } from "lucide-react";
 
 type OverviewShortcutCardProps = {
   title: string;
   value: string | number;
-  description: string;
-  icon: LucideIcon;
-  actionLabel: string;
+  actionLabel?: string;
   onClick: () => void;
   className?: string;
   kicker?: string;
@@ -16,8 +13,6 @@ type OverviewShortcutCardProps = {
 function OverviewShortcutCard({
   title,
   value,
-  description,
-  icon: Icon,
   actionLabel,
   onClick,
   className = "",
@@ -31,17 +26,15 @@ function OverviewShortcutCard({
           {kicker ? <p className="metric-kicker">{kicker}</p> : null}
           <h3>{title}</h3>
         </div>
-        <span className="metric-card-icon" aria-hidden="true">
-          <Icon size={20} strokeWidth={2.2} />
-        </span>
       </div>
-      {insight ? <span className="metric-insight">{insight}</span> : null}
       <strong>{value}</strong>
-      <p>{description}</p>
-      <span className="metric-card-action">
-        {actionLabel}
-        <ArrowRight size={16} strokeWidth={2.4} />
-      </span>
+      {insight ? <span className="metric-insight">{insight}</span> : null}
+      {actionLabel ? (
+        <span className="metric-card-action">
+          {actionLabel}
+          <ArrowRight size={16} strokeWidth={2.4} />
+        </span>
+      ) : null}
     </button>
   );
 }

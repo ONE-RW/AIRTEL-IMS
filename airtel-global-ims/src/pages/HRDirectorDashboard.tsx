@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
+  ArrowLeft,
   Building2,
   ChevronDown,
   ClipboardCheck,
@@ -115,6 +116,9 @@ type WorkflowReportCount = {
   total: number;
 };
 
+type DateWindowFilter = "all" | "weekly" | "monthly";
+type ExportFormat = "html" | "excel" | "pdf";
+
 type WorkflowDashboardData = {
   requests: WorkflowRequestRow[];
   returns: ReturnRow[];
@@ -163,6 +167,7 @@ const PAGE_SIZE_OPTIONS = [6, 12, 18];
 
 function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboardProps) {
   const [activeSection, setActiveSection] = useState("overview");
+  const [isSectionHistoryReady, setIsSectionHistoryReady] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
     "HR Director": true,
@@ -185,6 +190,16 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
   const [selectedReportKey, setSelectedReportKey] = useState("");
   const [pageByKey, setPageByKey] = useState<Record<string, number>>({});
   const [pageSizeByKey, setPageSizeByKey] = useState<Record<string, number>>({});
+  const [selectedApprovalNoteRequest, setSelectedApprovalNoteRequest] = useState<WorkflowRequestRow | null>(null);
+  const [approvalsSearchTerm, setApprovalsSearchTerm] = useState("");
+  const [approvalsDateWindow, setApprovalsDateWindow] = useState<DateWindowFilter>("all");
+  const [approvalsSpecificDate, setApprovalsSpecificDate] = useState("");
+  const [returnsSearchTerm, setReturnsSearchTerm] = useState("");
+  const [returnsDateWindow, setReturnsDateWindow] = useState<DateWindowFilter>("all");
+  const [returnsSpecificDate, setReturnsSpecificDate] = useState("");
+  const [reportsSearchTerm, setReportsSearchTerm] = useState("");
+  const [reportsDateWindow, setReportsDateWindow] = useState<DateWindowFilter>("all");
+  const [reportsSpecificDate, setReportsSpecificDate] = useState("");
 
   const [userForm, setUserForm] = useState({
     firstName: "",
@@ -202,6 +217,10 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
     branchId: "",
     departmentId: "",
   });
+  const validSections = useMemo(
+    () => new Set(sidebarGroups.flatMap((group) => group.links.map((link) => link.href.replace("#", "")))),
+    [],
+  );
 
   const loadHRWorkspace = async () => {
     setIsDashboardLoading(true);
@@ -429,15 +448,131 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
     reportCards.find((item) => item.key === selectedReportKey) ??
     reportCards[0] ??
     null;
-  const filteredWorkflowReportRequests = useMemo(() => {
-    const requests = workflowData?.requests ?? [];
+  const todayDateValue = new Date().toISOString().slice(0, 10);
 
-    if (!activeReport || activeReport.status === "all") {
-      return requests;
+  function getWindowStartDate(windowKey: DateWindowFilter) {
+    const boundary = new Date();
+    boundary.setHours(0, 0, 0, 0);
+
+    if (windowKey === "weekly") {
+      boundary.setDate(boundary.getDate() - 6);
+      return boundary;
     }
 
-    return requests.filter((request) => request.request_status === activeReport.status);
-  }, [activeReport, workflowData]);
+    if (windowKey === "monthly") {
+      boundary.setDate(boundary.getDate() - 29);
+      return boundary;
+    }
+
+    return null;
+  }
+
+  function isWithinDateWindow(value: string | null | undefined, windowKey: DateWindowFilter) {
+    if (windowKey === "all") {
+      return true;
+    }
+
+    if (!value) {
+      return false;
+    }
+
+    const parsedDate = new Date(value);
+    if (Number.isNaN(parsedDate.getTime())) {
+      return false;
+    }
+
+    const boundary = getWindowStartDate(windowKey);
+    return boundary ? parsedDate >= boundary : true;
+  }
+
+  function isSameSelectedDate(value: string | null | undefined, selectedDate: string) {
+    if (!selectedDate) {
+      return true;
+    }
+
+    if (!value) {
+      return false;
+    }
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(value))) {
+      return String(value) === selectedDate;
+    }
+
+    const parsedDate = new Date(value);
+    if (Number.isNaN(parsedDate.getTime())) {
+      return false;
+    }
+
+    const localDate = `${parsedDate.getFullYear()}-${String(parsedDate.getMonth() + 1).padStart(2, "0")}-${String(parsedDate.getDate()).padStart(2, "0")}`;
+    return localDate === selectedDate;
+  }
+
+  const normalizeDateWindowLabel = (windowKey: DateWindowFilter) =>
+    windowKey === "weekly" ? "Weekly" : windowKey === "monthly" ? "Monthly" : "All";
+
+  const filteredPendingWorkflowApprovals = useMemo(() => {
+    const searchTerm = approvalsSearchTerm.trim().toLowerCase();
+
+    return pendingWorkflowApprovals.filter((request) => {
+      const matchesSearch =
+        !searchTerm ||
+        request.requester_name.toLowerCase().includes(searchTerm) ||
+        request.category_name.toLowerCase().includes(searchTerm) ||
+        (request.branch_name || "").toLowerCase().includes(searchTerm) ||
+        String(request.id).includes(searchTerm);
+      const requestDate = request.requested_at || request.created_at;
+      const matchesDate =
+        (approvalsSpecificDate ? true : isWithinDateWindow(requestDate, approvalsDateWindow)) &&
+        isSameSelectedDate(requestDate, approvalsSpecificDate);
+
+      return matchesSearch && matchesDate;
+    });
+  }, [approvalsDateWindow, approvalsSpecificDate, approvalsSearchTerm, pendingWorkflowApprovals]);
+
+  const filteredPendingFinalReturnApprovals = useMemo(() => {
+    const searchTerm = returnsSearchTerm.trim().toLowerCase();
+
+    return pendingFinalReturnApprovals.filter((item) => {
+      const matchesSearch =
+        !searchTerm ||
+        item.asset_tag.toLowerCase().includes(searchTerm) ||
+        item.equipment_name.toLowerCase().includes(searchTerm) ||
+        item.employee_name.toLowerCase().includes(searchTerm) ||
+        item.employee_email.toLowerCase().includes(searchTerm);
+      const itemDate = item.requested_at || item.returned_at;
+      const matchesDate =
+        (returnsSpecificDate ? true : isWithinDateWindow(itemDate, returnsDateWindow)) &&
+        isSameSelectedDate(itemDate, returnsSpecificDate);
+
+      return matchesSearch && matchesDate;
+    });
+  }, [pendingFinalReturnApprovals, returnsDateWindow, returnsSearchTerm, returnsSpecificDate]);
+
+  const exportableWorkflowReportRequests = useMemo(() => {
+    const searchTerm = reportsSearchTerm.trim().toLowerCase();
+    return (workflowData?.requests ?? []).filter((request) => {
+      const matchesSearch =
+        !searchTerm ||
+        request.requester_name.toLowerCase().includes(searchTerm) ||
+        request.category_name.toLowerCase().includes(searchTerm) ||
+        (request.branch_name || "").toLowerCase().includes(searchTerm) ||
+        String(request.id).includes(searchTerm);
+      const requestDate = request.requested_at || request.created_at;
+      const matchesDate =
+        (reportsSpecificDate ? true : isWithinDateWindow(requestDate, reportsDateWindow)) &&
+        isSameSelectedDate(requestDate, reportsSpecificDate);
+
+      return matchesSearch && matchesDate;
+    });
+  }, [reportsDateWindow, reportsSearchTerm, reportsSpecificDate, workflowData]);
+
+  const filteredWorkflowReportRequests = useMemo(() => {
+    if (!activeReport || activeReport.status === "all") {
+      return exportableWorkflowReportRequests;
+    }
+
+    return exportableWorkflowReportRequests.filter((request) => request.request_status === activeReport.status);
+  }, [activeReport, exportableWorkflowReportRequests]);
 
   const pendingUsersCount = adminUsers.filter((account) => account.status === "pending").length;
   const activeUsersCount = adminUsers.filter((account) => account.status === "active").length;
@@ -449,78 +584,29 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
   const formatReturnReason = (reason?: ReturnRow["return_reason"]) =>
     reason === "leaving_job" ? "Employee leaving organization" : "Standard return";
 
-  const [exportFormat, setExportFormat] = useState<"html" | "csv" | "json" | "markdown">("html");
-  const exportFormatOptions: { value: "html" | "csv" | "json" | "markdown"; label: string }[] = [
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("html");
+  const [reportExportStatus, setReportExportStatus] = useState("all");
+  const [reportExportScheduleDate, setReportExportScheduleDate] = useState("");
+  const exportFormatOptions: { value: ExportFormat; label: string }[] = [
     { value: "html", label: "HTML (branded)" },
-    { value: "csv", label: "CSV" },
-    { value: "json", label: "JSON" },
-    { value: "markdown", label: "Markdown" },
+    { value: "excel", label: "Excel" },
+    { value: "pdf", label: "PDF" },
   ];
 
   const getExportFilename = (filename: string) => {
     const base = filename.replace(/\.html?$/i, "");
-    const ext = exportFormat === "markdown" ? "md" : exportFormat;
+    const ext = exportFormat === "excel" ? "xls" : exportFormat;
     return `${base}.${ext}`;
   };
 
-  const escapeCsvValue = (value: string | number | null | undefined) => {
-    const text = String(value ?? "");
-    if (/[",\n\r,]/.test(text)) {
-      return `"${text.replace(/"/g, '""')}"`;
-    }
-    return text;
-  };
-
-  const rowsToCsv = (rows: Array<Record<string, string | number>>) => {
-    const headers = Object.keys(rows[0]);
-    const headerLine = headers.map(escapeCsvValue).join(",");
-    const bodyLines = rows.map((row) => headers.map((header) => escapeCsvValue(row[header])).join(","));
-    return [headerLine, ...bodyLines].join("\r\n");
-  };
-
-  const rowsToMarkdown = (
+  const buildBrandedExportHtml = (
     rows: Array<Record<string, string | number>>,
     title: string,
     subtitle: string,
+    statusLabel?: string,
+    scheduledDate?: string,
+    footerLabel = "Generated from Airtel IMS HR Director workflow reporting.",
   ) => {
-    const headers = Object.keys(rows[0]);
-    const titleRow = `# ${title.replace(/\|/g, "\\|")}`;
-    const subtitleRow = `**${subtitle.replace(/\|/g, "\\|")}**\n\n`;
-    const headerRow = `| ${headers.map((header) => header.replace(/_/g, " ")).join(" | ")} |`;
-    const dividerRow = `| ${headers.map(() => "---").join(" | ")} |`;
-    const bodyRows = rows
-      .map((row) =>
-        `| ${headers
-          .map((header) => String(row[header] ?? "").replace(/\|/g, "\\|"))
-          .join(" | ")} |`,
-      )
-      .join("\n");
-
-    return `${titleRow}\n${subtitleRow}${headerRow}\n${dividerRow}\n${bodyRows}`;
-  };
-
-  const rowsToJson = (rows: Array<Record<string, string | number>>) =>
-    JSON.stringify(
-      {
-        exportedFrom: "Airtel Inventory Management System",
-        exportedAt: new Date().toISOString(),
-        rows,
-      },
-      null,
-      2,
-    );
-
-  const downloadBrandedDocument = (
-    filename: string,
-    title: string,
-    subtitle: string,
-    rows: Array<Record<string, string | number>>,
-  ) => {
-    if (rows.length === 0) {
-      setActionError("There is no report data to export yet.");
-      return;
-    }
-
     const headers = Object.keys(rows[0]);
     const headerLabels = headers.map((header) => header.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase()));
     const generatedOn = new Date().toLocaleString();
@@ -533,7 +619,7 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#39;");
 
-    const htmlDocument = `<!DOCTYPE html>
+    return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -548,7 +634,7 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
     .eyebrow { margin: 0 0 8px; font-size: 12px; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; color: #d71920; }
     h1 { margin: 0; font-size: 28px; line-height: 1.2; }
     .subtitle { margin: 10px 0 0; font-size: 14px; color: #587287; }
-    .meta { text-align: right; font-size: 13px; color: #587287; }
+    .meta { text-align: right; font-size: 13px; color: #587287; display: grid; gap: 6px; justify-items: end; }
     .meta strong { display: block; color: #17324d; font-size: 14px; margin-bottom: 6px; }
     .table-wrap { padding: 22px 32px 32px; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -571,6 +657,8 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
           <img src="${logoUrl}" alt="Airtel logo" />
           <strong>Professional Export</strong>
           <span>Generated: ${escapeHtml(generatedOn)}</span>
+          ${statusLabel ? `<span>Status: ${escapeHtml(statusLabel)}</span>` : ""}
+          ${scheduledDate ? `<span>Scheduled date: ${escapeHtml(scheduledDate)}</span>` : ""}
           <span>Total records: ${rows.length}</span>
         </div>
       </div>
@@ -584,28 +672,65 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
           </tbody>
         </table>
       </div>
-      <div class="footer">Generated from Airtel IMS HR Director workflow reporting.</div>
+      <div class="footer">${escapeHtml(footerLabel)}</div>
     </div>
   </div>
 </body>
 </html>`;
+  };
 
-    let fileContent = htmlDocument;
-    let mimeType = "text/html;charset=utf-8;";
-    const exportFilename = getExportFilename(filename);
-
-    if (exportFormat === "csv") {
-      fileContent = rowsToCsv(rows);
-      mimeType = "text/csv;charset=utf-8;";
-    } else if (exportFormat === "json") {
-      fileContent = rowsToJson(rows);
-      mimeType = "application/json;charset=utf-8;";
-    } else if (exportFormat === "markdown") {
-      fileContent = rowsToMarkdown(rows, title, subtitle);
-      mimeType = "text/markdown;charset=utf-8;";
+  const downloadBrandedDocument = (
+    filename: string,
+    title: string,
+    subtitle: string,
+    rows: Array<Record<string, string | number>>,
+    format: ExportFormat,
+    statusLabel?: string,
+    scheduledDate?: string,
+  ) => {
+    if (rows.length === 0) {
+      setActionError("There is no report data to export yet.");
+      return;
+    }
+    if (scheduledDate && scheduledDate > todayDateValue) {
+      const scheduledExports = JSON.parse(window.localStorage.getItem("airtel-ims-scheduled-exports") || "[]") as Array<Record<string, string>>;
+      scheduledExports.push({
+        area: "hr-director",
+        filename: getExportFilename(filename),
+        title,
+        format,
+        scheduledDate,
+        statusLabel: statusLabel || "All workflow requests",
+        createdAt: new Date().toISOString(),
+      });
+      window.localStorage.setItem("airtel-ims-scheduled-exports", JSON.stringify(scheduledExports));
+      setActionMessage(`Export scheduled for ${scheduledDate}.`);
+      return;
     }
 
-    const blob = new Blob([fileContent], { type: mimeType });
+    const htmlDocument = buildBrandedExportHtml(rows, title, subtitle, statusLabel, scheduledDate);
+    const exportFilename = getExportFilename(filename);
+
+    if (format === "pdf") {
+      const printWindow = window.open("", "_blank", "noopener,noreferrer,width=1200,height=900");
+      if (!printWindow) {
+        setActionError("Allow pop-ups to export this report as PDF.");
+        return;
+      }
+
+      printWindow.document.open();
+      printWindow.document.write(htmlDocument);
+      printWindow.document.close();
+      printWindow.focus();
+      window.setTimeout(() => {
+        printWindow.print();
+      }, 350);
+      setActionMessage("Print dialog opened. Choose Save as PDF to finish the export.");
+      return;
+    }
+
+    const mimeType = format === "excel" ? "application/vnd.ms-excel;charset=utf-8;" : "text/html;charset=utf-8;";
+    const blob = new Blob([htmlDocument], { type: mimeType });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -654,6 +779,58 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
       setIsSidebarOpen(false);
     }
   };
+
+  const handleBackNavigation = () => {
+    if (!window.history.state?.section || activeSection === "overview") {
+      setActiveSection("overview");
+      return;
+    }
+
+    window.history.back();
+  };
+
+  useEffect(() => {
+    const hashSection = window.location.hash.replace("#", "");
+    const initialSection = validSections.has(hashSection) ? hashSection : "overview";
+
+    setActiveSection(initialSection);
+    window.history.replaceState({ section: initialSection }, "", `#${initialSection}`);
+    setIsSectionHistoryReady(true);
+  }, [validSections]);
+
+  useEffect(() => {
+    const syncSectionFromHistory = () => {
+      const historySection = typeof window.history.state?.section === "string" ? window.history.state.section : "";
+      const hashSection = window.location.hash.replace("#", "");
+      const nextSection = validSections.has(historySection)
+        ? historySection
+        : validSections.has(hashSection)
+          ? hashSection
+          : "overview";
+
+      setActiveSection(nextSection);
+    };
+
+    window.addEventListener("popstate", syncSectionFromHistory);
+    window.addEventListener("hashchange", syncSectionFromHistory);
+
+    return () => {
+      window.removeEventListener("popstate", syncSectionFromHistory);
+      window.removeEventListener("hashchange", syncSectionFromHistory);
+    };
+  }, [validSections]);
+
+  useEffect(() => {
+    if (!isSectionHistoryReady) {
+      return;
+    }
+
+    const nextHash = `#${activeSection}`;
+
+    if (window.history.state?.section !== activeSection || window.location.hash !== nextHash) {
+      window.history.pushState({ section: activeSection }, "", nextHash);
+    }
+  }, [activeSection, isSectionHistoryReady]);
 
   const resetUserForm = () => {
     setUserForm({
@@ -849,11 +1026,6 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
 
   const renderOverviewSection = () => (
     (() => {
-      const unitAccountStatusData = [
-        { label: "Active", value: activeUsersCount },
-        { label: "Pending", value: pendingUsersCount },
-        { label: "Other", value: Math.max(adminUsers.length - activeUsersCount - pendingUsersCount, 0) },
-      ];
       const workflowPressureData = [
         { label: "Pending approvals", value: pendingWorkflowApprovals.length },
         { label: "Return approvals", value: pendingFinalReturnApprovals.length },
@@ -864,49 +1036,8 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
     <>
       <section className="dashboard-card-grid">
         <OverviewShortcutCard
-          title="Unit Members"
-          value={adminUsers.length}
-          description="People visible inside this HR Director unit workspace."
-          icon={Users}
-          actionLabel="Open users"
-          onClick={() => setActiveSection("users")}
-          kicker="Workforce"
-        />
-        <OverviewShortcutCard
-          title="Active Accounts"
-          value={activeUsersCount}
-          description="Users already active and available in the unit."
-          icon={ShieldCheck}
-          actionLabel="Review roster"
-          onClick={() => setActiveSection("users")}
-          kicker="Status"
-        />
-        <OverviewShortcutCard
-          title="Pending Review"
-          value={pendingUsersCount}
-          description="Accounts created from HR that still need final approval."
-          icon={ClipboardCheck}
-          actionLabel="Inspect queue"
-          onClick={() => setActiveSection("users")}
-          kicker="Approval"
-        />
-        <OverviewShortcutCard
-          title="Create User"
-          value={filteredRolesForUnit.length}
-          description="Start a new employee account with role and location details."
-          icon={UserPlus}
-          actionLabel="Open form"
-          onClick={() => {
-            setActiveSection("users");
-            setIsUserFormOpen(true);
-          }}
-          kicker="Action"
-        />
-        <OverviewShortcutCard
           title="Pending HRD Approvals"
           value={pendingWorkflowApprovals.length}
-          description="Employee item requests waiting for HR Director workflow approval."
-          icon={ShieldCheck}
           actionLabel="Open approvals"
           onClick={() => setActiveSection("approvals")}
           kicker="Workflow"
@@ -914,8 +1045,6 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
         <OverviewShortcutCard
           title="Return Approvals"
           value={pendingFinalReturnApprovals.length}
-          description="Offboarding device returns waiting for HR Director final approval."
-          icon={ClipboardCheck}
           actionLabel="Open returns"
           onClick={() => setActiveSection("returns")}
           kicker="Offboarding"
@@ -923,8 +1052,6 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
         <OverviewShortcutCard
           title="Workflow Reports"
           value={completedWorkflowRequests.length}
-          description="Track approved, fulfilled, and rejected equipment requests."
-          icon={FileChartColumn}
           actionLabel="Open reports"
           onClick={() => {
             setSelectedReportKey("request-all");
@@ -934,12 +1061,6 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
         />
       </section>
       <section className="chart-panel-grid">
-        <section className="dashboard-panel chart-panel-card">
-          <div className="panel-header">
-            <h3>Unit Account Status</h3>
-          </div>
-          <DonutChart data={unitAccountStatusData} emptyLabel="No HR Director account data available." />
-        </section>
         <section className="dashboard-panel chart-panel-card">
           <div className="panel-header">
             <h3>Workflow Pressure</h3>
@@ -1198,56 +1319,194 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
   const renderApprovalsSection = () => {
     const approvalsPageKey = "approvals-list";
     const approvalsPageSize = pageSizeByKey[approvalsPageKey] || DEFAULT_ITEMS_PER_PAGE;
-    const approvalsTotalPages = Math.max(Math.ceil(pendingWorkflowApprovals.length / approvalsPageSize), 1);
+    const approvalsTotalPages = Math.max(Math.ceil(filteredPendingWorkflowApprovals.length / approvalsPageSize), 1);
     const approvalsCurrentPage = Math.min(pageByKey[approvalsPageKey] || 1, approvalsTotalPages);
-    const paginatedApprovals = paginateRows(pendingWorkflowApprovals, approvalsCurrentPage, approvalsPageSize);
+    const paginatedApprovals = paginateRows(filteredPendingWorkflowApprovals, approvalsCurrentPage, approvalsPageSize);
 
     return (
     <section className="dashboard-panel wide-panel">
       <div className="panel-header">
         <h3>HR Director Workflow Approvals</h3>
-        <span>{pendingWorkflowApprovals.length} pending requests</span>
+        <span>{filteredPendingWorkflowApprovals.length} pending requests</span>
+        <div className="panel-header-actions">
+          <input
+            className="table-search-input"
+            type="search"
+            value={approvalsSearchTerm}
+            onChange={(event) => setApprovalsSearchTerm(event.target.value)}
+            placeholder="Search requester, request, branch"
+            aria-label="Search approval requests"
+          />
+        </div>
       </div>
-      <p className="dashboard-subtitle">
-        Review employee equipment requests that reached the HR Director approval stage before they continue to the next workflow step.
-      </p>
+      <div className="filter-chip-row">
+        {(["all", "weekly", "monthly"] as DateWindowFilter[]).map((windowKey) => (
+          <button
+            key={windowKey}
+            type="button"
+            className={`filter-chip${approvalsDateWindow === windowKey ? " is-active" : ""}`}
+            onClick={() => setApprovalsDateWindow(windowKey)}
+          >
+            {normalizeDateWindowLabel(windowKey)}
+          </button>
+        ))}
+      </div>
+      <div className="report-date-filter-row">
+        <input
+          className="table-search-input report-date-input"
+          type="date"
+          value={approvalsSpecificDate}
+          max={todayDateValue}
+          onChange={(event) => setApprovalsSpecificDate(event.target.value)}
+          aria-label="Filter approvals by specific date"
+        />
+        {approvalsSpecificDate ? (
+          <button className="secondary-btn compact-btn" type="button" onClick={() => setApprovalsSpecificDate("")}>
+            Clear date
+          </button>
+        ) : null}
+      </div>
 
-      <div className="mini-list request-card-grid">
-        {pendingWorkflowApprovals.length > 0 ? (
+      <div className="user-table workflow-request-table">
+        <div className="user-table-head workflow-request-table-head">
+          <span>Request</span>
+          <span>Requester</span>
+          <span>Status / Stage</span>
+          <span>Requested</span>
+          <span>Notes</span>
+          <span>Actions</span>
+        </div>
+        {filteredPendingWorkflowApprovals.length > 0 ? (
           paginatedApprovals.map((request) => {
             const isSubmitting = pendingRequestActionId === request.id;
 
             return (
-              <article className="mini-list-card action-card" key={request.id}>
-                <strong>
-                  {request.requester_name} / {request.category_name}
-                </strong>
-                <span>
-                  <span className={`status-pill status-${request.request_status}`}>{request.request_status}</span>
-                  {" "}
-                  {request.branch_name || "No branch"} / {normalizeWorkflowLabel(request.currentStageLabel)}
-                </span>
-                <span>
-                  {request.requester_department_name || request.requester_job_title || "No department"} / {request.requester_employment_status || "No employment status"}
-                </span>
-                <span>Type: {(request.request_type || "standard").replace("_", " ")}</span>
-                <span>
-                  {request.requester_office_location || request.requester_email || "No office location"} / Requested: {formatProfileDate(request.requested_at || request.created_at)}
-                </span>
-                <span>{request.notes || "No request note added."}</span>
-                {request.clarification_status === "needed" && request.clarification_note ? (
-                  <p className="form-message warning-text">
-                    Clarification needed: {request.clarification_note}
+              <div className="user-table-row workflow-request-table-row" key={request.id}>
+                <div className="user-primary-cell">
+                  <strong>{request.category_name}</strong>
+                  <span>Request {request.id}</span>
+                  <span>Type: {(request.request_type || "standard").replace("_", " ")}</span>
+                </div>
+                <div className="user-secondary-cell">
+                  <strong>{request.requester_name}</strong>
+                  <span>{request.requester_department_name || request.requester_job_title || "No department"}</span>
+                  <span>{request.requester_employment_status || "No employment status"}</span>
+                </div>
+                <div className="workflow-table-stack">
+                  <div className="user-secondary-cell">
+                    <strong>{normalizeWorkflowLabel(request.currentStageLabel)}</strong>
+                    <span><span className={`status-pill status-${request.request_status}`}>{request.request_status}</span></span>
+                    <span>{request.branch_name || "No branch"}</span>
+                    {request.fulfillment_status && request.fulfillment_status !== "ready" ? (
+                      <span>
+                        Store: {request.fulfillment_status.replace("_", " ")}
+                        {request.fulfillment_note ? ` / ${request.fulfillment_note}` : ""}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="user-secondary-cell">
+                  <strong>{formatProfileDate(request.requested_at || request.created_at)}</strong>
+                  <span>{request.requester_office_location || request.requester_email || "No office location"}</span>
+                </div>
+                <div className="workflow-table-stack">
+                  <div className="user-secondary-cell">
+                    <strong>Notes and workflow</strong>
+                    <span>Open the request note and approval history in a modal.</span>
+                  </div>
+                  <button
+                    className="secondary-btn compact-btn workflow-note-trigger"
+                    type="button"
+                    onClick={() => setSelectedApprovalNoteRequest(request)}
+                  >
+                    View notes
+                  </button>
+                </div>
+                <div className="workflow-table-actions">
+                  <label className="field">
+                    <span>Approval note, or required reason if returning/rejecting</span>
+                    <textarea
+                      value={approvalNotes[request.id] || ""}
+                      onChange={(event) =>
+                        setApprovalNotes((current) => ({
+                          ...current,
+                          [request.id]: event.target.value,
+                        }))
+                      }
+                      placeholder="Add approval context, compliance note, or rejection reason"
+                      disabled={isSubmitting}
+                    />
+                  </label>
+
+                  <div className="card-action-row">
+                    <button className="primary-btn compact-btn btn-success" type="button" onClick={() => void handleApproveRequest(request.id)} disabled={isSubmitting}>
+                      {isSubmitting ? "Working..." : "Approve"}
+                    </button>
+                    <button className="secondary-btn compact-btn btn-soft-warning" type="button" onClick={() => void handleReturnRequestForClarification(request.id)} disabled={isSubmitting}>
+                      {isSubmitting ? "Working..." : "Return"}
+                    </button>
+                    <button className="secondary-btn compact-btn btn-soft-danger" type="button" onClick={() => void handleRejectRequest(request.id)} disabled={isSubmitting}>
+                      {isSubmitting ? "Working..." : "Reject"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })
+        ) : (
+          <p className="loading-text">No requests are waiting for HR Director approval right now.</p>
+        )}
+      </div>
+      {selectedApprovalNoteRequest ? (
+        <div className="hr-modal-overlay" role="presentation" onClick={() => setSelectedApprovalNoteRequest(null)}>
+          <div
+            className="hr-modal-card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="approval-note-modal-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="panel-header">
+              <div>
+                <h3 id="approval-note-modal-title">
+                  {selectedApprovalNoteRequest.requester_name} / {selectedApprovalNoteRequest.category_name}
+                </h3>
+                <p className="dashboard-subtitle">
+                  Request {selectedApprovalNoteRequest.id} / {normalizeWorkflowLabel(selectedApprovalNoteRequest.currentStageLabel)}
+                </p>
+              </div>
+              <button className="secondary-btn compact-btn" type="button" onClick={() => setSelectedApprovalNoteRequest(null)}>
+                Close
+              </button>
+            </div>
+
+            <div className="workflow-note-modal-stack">
+              <section className="workflow-note-summary">
+                <strong>Request note</strong>
+                <p>{selectedApprovalNoteRequest.notes || "No request note added."}</p>
+              </section>
+
+              {selectedApprovalNoteRequest.clarification_status === "needed" && selectedApprovalNoteRequest.clarification_note ? (
+                <section className="workflow-note-summary">
+                  <strong>Clarification</strong>
+                  <p className="warning-text">{selectedApprovalNoteRequest.clarification_note}</p>
+                </section>
+              ) : null}
+
+              {selectedApprovalNoteRequest.fulfillment_status && selectedApprovalNoteRequest.fulfillment_status !== "ready" ? (
+                <section className="workflow-note-summary">
+                  <strong>Store status</strong>
+                  <p>
+                    {selectedApprovalNoteRequest.fulfillment_status.replace("_", " ")}
+                    {selectedApprovalNoteRequest.fulfillment_note ? ` / ${selectedApprovalNoteRequest.fulfillment_note}` : ""}
                   </p>
-                ) : null}
-                {request.fulfillment_status && request.fulfillment_status !== "ready" ? (
-                  <span>
-                    Store status: <span className={`status-pill status-${request.fulfillment_status}`}>{request.fulfillment_status.replace("_", " ")}</span>
-                    {request.fulfillment_note ? ` / ${request.fulfillment_note}` : ""}
-                  </span>
-                ) : null}
+                </section>
+              ) : null}
+
+              <section>
+                <strong>Workflow steps</strong>
                 <div className="workflow-step-list">
-                  {request.workflowSteps.map((step) => (
+                  {selectedApprovalNoteRequest.workflowSteps.map((step) => (
                     <div className="workflow-step-row" key={step.id}>
                       <strong>{normalizeWorkflowLabel(step.step_label)}</strong>
                       <span>
@@ -1258,41 +1517,12 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
                     </div>
                   ))}
                 </div>
-
-                <label className="field">
-                  <span>Approval note, or required reason if returning/rejecting</span>
-                  <textarea
-                    value={approvalNotes[request.id] || ""}
-                    onChange={(event) =>
-                      setApprovalNotes((current) => ({
-                        ...current,
-                        [request.id]: event.target.value,
-                      }))
-                    }
-                    placeholder="Add approval context, compliance note, or rejection reason"
-                    disabled={isSubmitting}
-                  />
-                </label>
-
-                <div className="card-action-row">
-                  <button className="primary-btn compact-btn btn-success" type="button" onClick={() => void handleApproveRequest(request.id)} disabled={isSubmitting}>
-                    {isSubmitting ? "Working..." : "Approve"}
-                  </button>
-                  <button className="secondary-btn compact-btn btn-soft-warning" type="button" onClick={() => void handleReturnRequestForClarification(request.id)} disabled={isSubmitting}>
-                    {isSubmitting ? "Working..." : "Return"}
-                  </button>
-                  <button className="secondary-btn compact-btn btn-soft-danger" type="button" onClick={() => void handleRejectRequest(request.id)} disabled={isSubmitting}>
-                    {isSubmitting ? "Working..." : "Reject"}
-                  </button>
-                </div>
-              </article>
-            );
-          })
-        ) : (
-          <p className="loading-text">No requests are waiting for HR Director approval right now.</p>
-        )}
-      </div>
-      {renderPaginationBar(approvalsPageKey, pendingWorkflowApprovals.length, approvalsCurrentPage, approvalsPageSize, (page) =>
+              </section>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {renderPaginationBar(approvalsPageKey, filteredPendingWorkflowApprovals.length, approvalsCurrentPage, approvalsPageSize, (page) =>
         setPageByKey((current) => ({
           ...current,
           [approvalsPageKey]: page,
@@ -1315,47 +1545,81 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
         <h3>Workflow Reports</h3>
         <div className="panel-header-actions">
           <span>{filteredWorkflowReportRequests.length} records</span>
-          <label className="export-format-select-label">
-            <span className="sr-only">Export format</span>
-            <select
-              className="export-format-select"
-              value={exportFormat}
-              onChange={(event) => setExportFormat(event.target.value as "html" | "csv" | "json" | "markdown")}
-              aria-label="Choose export format"
-            >
-              {exportFormatOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            className="secondary-btn compact-btn export-btn"
-            type="button"
-            onClick={() =>
-              downloadBrandedDocument(
-                "hr-director-workflow-report.html",
-                "HR Director Workflow Report",
-                "A branded export of workflow requests, approval stages, and request ownership.",
-                filteredWorkflowReportRequests.map((request) => ({
-                  request_id: request.id,
-                  requester: request.requester_name,
-                  email: request.requester_email,
-                  category: request.category_name,
-                  request_type: request.request_type || "standard",
-                  status: request.request_status,
-                  current_stage: request.currentStageLabel,
-                  approver: request.approver_name || "",
-                  requested_at: formatProfileDate(request.requested_at || request.created_at),
-                })),
-              )
-            }
-          >
-            <Download size={16} />
-            Export Document
-          </button>
+          <input
+            className="table-search-input"
+            type="search"
+            value={reportsSearchTerm}
+            onChange={(event) => setReportsSearchTerm(event.target.value)}
+            placeholder="Search requester, request, branch"
+            aria-label="Search workflow reports"
+          />
         </div>
+      </div>
+      <div className="report-export-toolbar">
+        <label className="report-export-field">
+          <span>Export status</span>
+          <select value={reportExportStatus} onChange={(event) => setReportExportStatus(event.target.value)} aria-label="Choose workflow status to export">
+            <option value="all">All workflow requests</option>
+            {reportCards.filter((item) => item.status !== "all").map((item) => (
+              <option key={item.key} value={item.status}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="report-export-field">
+          <span>Export format</span>
+          <select value={exportFormat} onChange={(event) => setExportFormat(event.target.value as ExportFormat)} aria-label="Choose workflow report export format">
+            {exportFormatOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="report-export-field">
+          <span>Scheduled date</span>
+          <input
+            className="report-export-field-date"
+            type="date"
+            value={reportExportScheduleDate}
+            min={todayDateValue}
+            onChange={(event) => setReportExportScheduleDate(event.target.value)}
+            aria-label="Choose workflow report scheduled export date"
+          />
+        </label>
+        <button
+          className="primary-btn report-export-action"
+          type="button"
+          onClick={() => {
+            const exportRequests =
+              reportExportStatus === "all"
+                ? exportableWorkflowReportRequests
+                : exportableWorkflowReportRequests.filter((request) => request.request_status === reportExportStatus);
+            downloadBrandedDocument(
+              "hr-director-workflow-report.html",
+              "HR Director Workflow Report",
+              `A branded export of workflow requests for ${reportExportStatus === "all" ? "all statuses" : reportExportStatus}.`,
+              exportRequests.map((request, index) => ({
+                record_no: index + 1,
+                requester: request.requester_name,
+                email: request.requester_email,
+                category: request.category_name,
+                request_type: request.request_type || "standard",
+                status: request.request_status,
+                current_stage: request.currentStageLabel,
+                approver: request.approver_name || "",
+                requested_at: formatProfileDate(request.requested_at || request.created_at),
+              })),
+              exportFormat,
+              reportExportStatus === "all" ? "All workflow requests" : reportExportStatus,
+              reportExportScheduleDate || undefined,
+            );
+          }}
+        >
+          <Download size={16} />
+          Export Report
+        </button>
       </div>
 
       <div className="report-summary-grid">
@@ -1372,52 +1636,87 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
           </button>
         ))}
       </div>
+      <div className="filter-chip-row">
+        {(["all", "weekly", "monthly"] as DateWindowFilter[]).map((windowKey) => (
+          <button
+            key={windowKey}
+            type="button"
+            className={`filter-chip${reportsDateWindow === windowKey ? " is-active" : ""}`}
+            onClick={() => setReportsDateWindow(windowKey)}
+          >
+            {normalizeDateWindowLabel(windowKey)}
+          </button>
+        ))}
+      </div>
+      <div className="report-date-filter-row">
+        <input
+          className="table-search-input report-date-input"
+          type="date"
+          value={reportsSpecificDate}
+          max={todayDateValue}
+          onChange={(event) => setReportsSpecificDate(event.target.value)}
+          aria-label="Filter reports by specific date"
+        />
+        {reportsSpecificDate ? (
+          <button className="secondary-btn compact-btn" type="button" onClick={() => setReportsSpecificDate("")}>
+            Clear date
+          </button>
+        ) : null}
+      </div>
 
       <div className="report-bottom-grid">
         <section className="report-panel">
           <div className="panel-header">
             <h3>{activeReport ? `${activeReport.label.charAt(0).toUpperCase() + activeReport.label.slice(1)} details` : "Report details"}</h3>
           </div>
-          <div className="mini-list request-card-grid">
+          <div className="user-table workflow-request-table">
+            <div className="user-table-head workflow-request-table-head">
+              <span>Request</span>
+              <span>Requester</span>
+              <span>Status / Stage</span>
+              <span>Requested</span>
+              <span>Notes</span>
+              <span>Details</span>
+            </div>
             {paginatedWorkflowReportRequests.map((request) => (
-              <article className="mini-list-card action-card" key={request.id}>
-                <strong>
-                  {request.requester_name} / {request.category_name}
-                </strong>
-                <span>
-                  <span className={`status-pill status-${request.request_status}`}>{request.request_status}</span>
-                  {" "}
-                  {request.branch_name || "No branch"} / {normalizeWorkflowLabel(request.currentStageLabel)}
-                </span>
-                <span>
-                  {request.requester_department_name || request.requester_job_title || "No department"} / {request.requester_employment_status || "No employment status"}
-                </span>
-                <span>Type: {(request.request_type || "standard").replace("_", " ")}</span>
-                <span>
-                  {request.requester_office_location || "No office location"} / Requested: {formatProfileDate(request.requested_at || request.created_at)}
-                </span>
-                <span>{request.notes || "No request note provided."}</span>
-                {request.request_status === "rejected" ? (
-                  <p className="form-message error-text">
-                    Rejection reason:{" "}
-                    {request.workflowSteps.find((step) => step.action_status === "rejected")?.action_note ||
-                      request.notes ||
-                      "No rejection reason was recorded."}
-                  </p>
-                ) : null}
-                <div className="workflow-step-list">
-                  {request.workflowSteps.map((step) => (
-                    <div className="workflow-step-row" key={step.id}>
-                      <strong>{normalizeWorkflowLabel(step.step_label)}</strong>
-                      <span>
-                        {step.action_status}
-                        {step.actor_name ? ` / ${step.actor_name}` : ""}
-                      </span>
-                      {step.action_note ? <span>{step.action_note}</span> : null}
-                    </div>
-                  ))}
+              <div className="user-table-row workflow-request-table-row" key={request.id}>
+                <div className="user-primary-cell">
+                  <strong>{request.category_name}</strong>
+                  <span>Request {request.id}</span>
+                  <span>Type: {(request.request_type || "standard").replace("_", " ")}</span>
                 </div>
-              </article>
+                <div className="user-secondary-cell">
+                  <strong>{request.requester_name}</strong>
+                  <span>{request.requester_department_name || request.requester_job_title || "No department"}</span>
+                  <span>{request.requester_employment_status || "No employment status"}</span>
+                </div>
+                <div className="workflow-table-stack">
+                  <div className="user-secondary-cell">
+                    <strong>{normalizeWorkflowLabel(request.currentStageLabel)}</strong>
+                    <span><span className={`status-pill status-${request.request_status}`}>{request.request_status}</span></span>
+                    <span>{request.branch_name || "No branch"}</span>
+                  </div>
+                </div>
+                <div className="user-secondary-cell">
+                  <strong>{formatProfileDate(request.requested_at || request.created_at)}</strong>
+                  <span>{request.requester_office_location || "No office location"}</span>
+                </div>
+                <div className="workflow-table-stack">
+                  <div className="user-secondary-cell">
+                    <strong>Request note</strong>
+                    <span>Open the request note and workflow history in a modal.</span>
+                  </div>
+                </div>
+                <div className="workflow-table-actions">
+                  <button
+                    className="secondary-btn compact-btn workflow-note-trigger"
+                    type="button"
+                    onClick={() => setSelectedApprovalNoteRequest(request)}
+                  >
+                    View notes
+                  </button>
+                </div>
+              </div>
             ))}
             {filteredWorkflowReportRequests.length === 0 ? (
               <p className="loading-text">No workflow requests found for the selected status.</p>
@@ -1438,21 +1737,55 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
   const renderReturnsSection = () => {
     const returnsPageKey = "return-final-approvals";
     const returnsPageSize = pageSizeByKey[returnsPageKey] || DEFAULT_ITEMS_PER_PAGE;
-    const returnsTotalPages = Math.max(Math.ceil(pendingFinalReturnApprovals.length / returnsPageSize), 1);
+    const returnsTotalPages = Math.max(Math.ceil(filteredPendingFinalReturnApprovals.length / returnsPageSize), 1);
     const returnsCurrentPage = Math.min(pageByKey[returnsPageKey] || 1, returnsTotalPages);
-    const paginatedReturns = paginateRows(pendingFinalReturnApprovals, returnsCurrentPage, returnsPageSize);
+    const paginatedReturns = paginateRows(filteredPendingFinalReturnApprovals, returnsCurrentPage, returnsPageSize);
 
     return (
       <section className="dashboard-panel wide-panel">
-        <div className="panel-header">
-          <h3>HR Director Final Return Approvals</h3>
-          <span>{pendingFinalReturnApprovals.length} waiting for HR Director</span>
+      <div className="panel-header">
+        <h3>HR Director Final Return Approvals</h3>
+        <span>{filteredPendingFinalReturnApprovals.length} waiting for HR Director</span>
+        <div className="panel-header-actions">
+          <input
+            className="table-search-input"
+            type="search"
+            value={returnsSearchTerm}
+            onChange={(event) => setReturnsSearchTerm(event.target.value)}
+            placeholder="Search asset, employee, email"
+            aria-label="Search return approvals"
+          />
         </div>
-        <p className="dashboard-subtitle">
-          Review offboarding device returns already received by IT Support. HR Director and IT Director must both approve before the device is saved back into the current IT store and the employee status is updated.
-        </p>
-        <div className="mini-list request-card-grid">
-          {pendingFinalReturnApprovals.length > 0 ? (
+      </div>
+      <div className="filter-chip-row">
+        {(["all", "weekly", "monthly"] as DateWindowFilter[]).map((windowKey) => (
+          <button
+            key={windowKey}
+            type="button"
+            className={`filter-chip${returnsDateWindow === windowKey ? " is-active" : ""}`}
+            onClick={() => setReturnsDateWindow(windowKey)}
+          >
+            {normalizeDateWindowLabel(windowKey)}
+          </button>
+        ))}
+      </div>
+      <div className="report-date-filter-row">
+        <input
+          className="table-search-input report-date-input"
+          type="date"
+          value={returnsSpecificDate}
+          max={todayDateValue}
+          onChange={(event) => setReturnsSpecificDate(event.target.value)}
+          aria-label="Filter return approvals by specific date"
+        />
+        {returnsSpecificDate ? (
+          <button className="secondary-btn compact-btn" type="button" onClick={() => setReturnsSpecificDate("")}>
+            Clear date
+          </button>
+        ) : null}
+      </div>
+      <div className="mini-list request-card-grid">
+          {filteredPendingFinalReturnApprovals.length > 0 ? (
             paginatedReturns.map((item) => {
               const form = finalReturnApprovalForm[item.id] ?? {
                 decision: "approve" as const,
@@ -1521,7 +1854,7 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
             <p className="loading-text">No returns are waiting for HR Director final approval right now.</p>
           )}
         </div>
-        {renderPaginationBar(returnsPageKey, pendingFinalReturnApprovals.length, returnsCurrentPage, returnsPageSize, (page) =>
+        {renderPaginationBar(returnsPageKey, filteredPendingFinalReturnApprovals.length, returnsCurrentPage, returnsPageSize, (page) =>
           setPageByKey((current) => ({
             ...current,
             [returnsPageKey]: page,
@@ -1546,13 +1879,6 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
       <aside className={`dashboard-sidebar ${isSidebarOpen ? "is-open" : "is-collapsed"}`}>
         <div className="sidebar-brand">
           <AirtelLogo />
-        </div>
-
-        <div className="sidebar-user">
-          <strong>
-            {user.firstName} {user.lastName}
-          </strong>
-          <span>{user.role.toLowerCase()}</span>
         </div>
 
         <nav className="sidebar-nav">
@@ -1618,12 +1944,15 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
         </header>
 
         <main className="dashboard-content">
-          <div className="dashboard-heading-row">
+      <div className="dashboard-heading-row">
             <div>
+              {activeSection !== "overview" ? (
+                <button className="dashboard-back-button" type="button" onClick={handleBackNavigation}>
+                  <ArrowLeft size={16} strokeWidth={2.4} />
+                  <span>Back</span>
+                </button>
+              ) : null}
               <h2>{activeSectionTitle}</h2>
-              <p className="dashboard-subtitle">
-                Keep your unit roster clean, submit new users, and track account readiness without leaving HR operations.
-              </p>
             </div>
             <div className="dashboard-breadcrumb">
               <span>Home</span>

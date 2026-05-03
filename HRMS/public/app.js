@@ -24,12 +24,9 @@ const actorRole = document.querySelector("#sidebar-actor-role");
 const dashboardChipLabel = document.querySelector("#dashboard-chip-label");
 const dashboardBreadcrumbCurrent = document.querySelector("#dashboard-breadcrumb-current");
 const overviewCopy = document.querySelector("#overview-copy");
-const sidebarRegisterLink = document.querySelector("#sidebar-register-link");
-const sidebarManagementGroup = document.querySelector("#sidebar-management-group");
 const mastheadAvatar = document.querySelector("#masthead-avatar");
 const userMenuTrigger = document.querySelector("#user-menu-trigger");
 const userMenuDropdown = document.querySelector("#user-menu-dropdown");
-const userMenuProfile = document.querySelector("#user-menu-profile");
 const userMenuLogout = document.querySelector("#user-menu-logout");
 const profilePanel = document.querySelector("#profile-panel");
 const profilePanelClose = document.querySelector("#profile-panel-close");
@@ -115,7 +112,7 @@ const sectionMeta = {
   },
   register: {
     title: "Employee Settings",
-    subtitleHr: "Register and maintain employee records that will be used by IMS.",
+    subtitleHr: "Edit employee records that will be used by IMS.",
     subtitleIt: "This section is limited to HR Recruitment Officer access.",
     breadcrumb: "Employee Settings",
   },
@@ -553,8 +550,6 @@ function renderOverviewCards() {
 
 function applyRoleView() {
   const hrView = isHrRole();
-  sidebarManagementGroup.classList.toggle("hidden", !hrView);
-  sidebarRegisterLink.classList.toggle("hidden", !hrView);
   if (!hrView && state.activeSection === "register") {
     setActiveSection("overview");
   }
@@ -669,9 +664,9 @@ function resetEmployeeForm() {
   state.editingEmployeeId = null;
   employeeForm.reset();
   employeeForm.status.value = "active";
-  employeeFormTitle.textContent = "Register employee";
+  employeeFormTitle.textContent = "Edit employee";
   cancelEditButton.classList.add("hidden");
-  setMessage(employeeMessage, "The HR Recruitment Officer can register and update employee source records here.");
+  setMessage(employeeMessage, "Select an existing employee to update HRMS source records.");
 }
 
 function fillEmployeeForm(employee) {
@@ -792,16 +787,6 @@ userMenuTrigger.addEventListener("click", (event) => {
   toggleUserMenu();
 });
 
-userMenuProfile.addEventListener("click", async () => {
-  closeUserMenu();
-  try {
-    const data = await requestJson("/api/auth/session", { method: "GET" });
-    openProfilePanel(data.user || {});
-  } catch (error) {
-    setMessage(loginHint, error.message, true);
-  }
-});
-
 userMenuLogout.addEventListener("click", async () => {
   closeUserMenu();
   await closeHrmsSession();
@@ -847,6 +832,11 @@ employeeForm.addEventListener("submit", async (event) => {
 
   if (!isHrRole()) {
     setMessage(employeeMessage, "Only the HR Recruitment Officer can update employee records.", true);
+    return;
+  }
+
+  if (!state.editingEmployeeId) {
+    setMessage(employeeMessage, "Please select an existing employee to edit. New employee registration is disabled.", true);
     return;
   }
 

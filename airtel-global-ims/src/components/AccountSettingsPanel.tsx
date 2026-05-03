@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import type { ChangeEvent } from "react";
+import { KeyRound, Save, Trash2, Upload } from "lucide-react";
 import { fetchJson, getApiMessage } from "../api";
 import { API_BASE_URL } from "../config";
 import type { LoggedInUser } from "../types";
@@ -8,6 +9,10 @@ type AccountSettingsPanelProps = {
   user: LoggedInUser;
   onUserUpdate: (user: LoggedInUser) => void;
 };
+
+function getUserInitials(user: LoggedInUser) {
+  return `${user.firstName?.[0] || ""}${user.lastName?.[0] || ""}`.toUpperCase() || "U";
+}
 
 function isValidAirtelRwandaPhone(value: string) {
   const digitsOnly = String(value || "").replace(/\D/g, "");
@@ -41,6 +46,7 @@ function AccountSettingsPanel({ user, onUserUpdate }: AccountSettingsPanelProps)
   const [passwordError, setPasswordError] = useState("");
   const [isProfileSaving, setIsProfileSaving] = useState(false);
   const [isPasswordSaving, setIsPasswordSaving] = useState(false);
+  const profilePreviewSource = profileForm.profileImageUrl || user.profileImageUrl;
 
   useEffect(() => {
     setProfileForm({
@@ -214,31 +220,38 @@ function AccountSettingsPanel({ user, onUserUpdate }: AccountSettingsPanelProps)
           <div className="subpanel-header">
             <h4>Profile Details</h4>
           </div>
-          <form className="simple-form" onSubmit={handleProfileSubmit}>
-            <div className="profile-picture-editor">
-              <img
-                className="profile-picture-preview"
-                src={profileForm.profileImageUrl || user.profileImageUrl || "/favicon.svg"}
-                alt={`${user.firstName} ${user.lastName} profile preview`}
-              />
+          <form className="simple-form settings-form settings-profile-form" onSubmit={handleProfileSubmit}>
+            <div className="profile-picture-editor settings-profile-hero-block">
+              {profilePreviewSource ? (
+                <img
+                  className="profile-picture-preview"
+                  src={profilePreviewSource}
+                  alt={`${user.firstName} ${user.lastName} profile preview`}
+                />
+              ) : (
+                <div className="profile-picture-preview profile-picture-placeholder" aria-hidden="true">
+                  {getUserInitials(user)}
+                </div>
+              )}
               <div className="profile-picture-controls">
-                <label className="secondary-btn compact-btn profile-upload-button">
+                <label className="secondary-btn compact-btn settings-action-btn profile-upload-button">
+                  <Upload size={15} />
                   <span>Upload picture</span>
                   <input type="file" accept="image/*" onChange={(event) => void handleProfileImageChange(event)} />
                 </label>
                 {profileForm.profileImageUrl ? (
                   <button
-                    className="secondary-btn compact-btn"
+                    className="secondary-btn compact-btn settings-action-btn settings-secondary-btn"
                     type="button"
                     onClick={() => setProfileForm((current) => ({ ...current, profileImageUrl: "" }))}
                   >
+                    <Trash2 size={15} />
                     Remove picture
                   </button>
                 ) : null}
-                <p className="profile-picture-hint">Images are optimized automatically before upload.</p>
               </div>
             </div>
-            <label className="field">
+            <label className="field settings-field-half">
               <span>First name</span>
               <input
                 value={profileForm.firstName}
@@ -246,7 +259,7 @@ function AccountSettingsPanel({ user, onUserUpdate }: AccountSettingsPanelProps)
                 required
               />
             </label>
-            <label className="field">
+            <label className="field settings-field-half">
               <span>Last name</span>
               <input
                 value={profileForm.lastName}
@@ -254,7 +267,7 @@ function AccountSettingsPanel({ user, onUserUpdate }: AccountSettingsPanelProps)
                 required
               />
             </label>
-            <label className="field">
+            <label className="field settings-field-full">
               <span>Email</span>
               <input
                 type="email"
@@ -263,7 +276,7 @@ function AccountSettingsPanel({ user, onUserUpdate }: AccountSettingsPanelProps)
                 required
               />
             </label>
-            <label className="field">
+            <label className="field settings-field-full">
               <span>Airtel Rwanda phone</span>
               <input
                 type="tel"
@@ -274,7 +287,8 @@ function AccountSettingsPanel({ user, onUserUpdate }: AccountSettingsPanelProps)
             </label>
             {profileMessage ? <p className="form-message success-text">{profileMessage}</p> : null}
             {profileError ? <p className="form-message error-text">{profileError}</p> : null}
-            <button className="primary-btn form-submit-btn" type="submit" disabled={isProfileSaving}>
+            <button className="primary-btn form-submit-btn settings-action-btn settings-submit-btn settings-submit-row" type="submit" disabled={isProfileSaving}>
+              <Save size={15} />
               {isProfileSaving ? "Saving..." : "Save profile"}
             </button>
           </form>
@@ -284,8 +298,8 @@ function AccountSettingsPanel({ user, onUserUpdate }: AccountSettingsPanelProps)
           <div className="subpanel-header">
             <h4>Security</h4>
           </div>
-          <form className="simple-form" onSubmit={handlePasswordSubmit}>
-            <label className="field">
+          <form className="simple-form settings-form settings-security-form" onSubmit={handlePasswordSubmit}>
+            <label className="field settings-field-half">
               <span>Current password</span>
               <input
                 type="password"
@@ -294,7 +308,7 @@ function AccountSettingsPanel({ user, onUserUpdate }: AccountSettingsPanelProps)
                 required
               />
             </label>
-            <label className="field">
+            <label className="field settings-field-half">
               <span>New password</span>
               <input
                 type="password"
@@ -304,7 +318,7 @@ function AccountSettingsPanel({ user, onUserUpdate }: AccountSettingsPanelProps)
                 required
               />
             </label>
-            <label className="field">
+            <label className="field settings-field-full">
               <span>Confirm password</span>
               <input
                 type="password"
@@ -316,7 +330,8 @@ function AccountSettingsPanel({ user, onUserUpdate }: AccountSettingsPanelProps)
             </label>
             {passwordMessage ? <p className="form-message success-text">{passwordMessage}</p> : null}
             {passwordError ? <p className="form-message error-text">{passwordError}</p> : null}
-            <button className="primary-btn form-submit-btn" type="submit" disabled={isPasswordSaving}>
+            <button className="primary-btn form-submit-btn settings-action-btn settings-submit-btn settings-submit-row" type="submit" disabled={isPasswordSaving}>
+              <KeyRound size={15} />
               {isPasswordSaving ? "Updating..." : "Change password"}
             </button>
           </form>
@@ -326,10 +341,28 @@ function AccountSettingsPanel({ user, onUserUpdate }: AccountSettingsPanelProps)
           <div className="subpanel-header">
             <h4>Account Summary</h4>
           </div>
-          <div className="mini-list">
+          <div className="settings-profile-hero">
+            {profilePreviewSource ? (
+              <img
+                className="settings-profile-hero-avatar"
+                src={profilePreviewSource}
+                alt={`${user.firstName} ${user.lastName} profile`}
+              />
+            ) : (
+              <div className="settings-profile-hero-avatar settings-profile-hero-avatar-fallback" aria-hidden="true">
+                {getUserInitials(user)}
+              </div>
+            )}
+            <div className="settings-profile-hero-copy">
+              <strong>{user.firstName} {user.lastName}</strong>
+              <span>{user.email}</span>
+              <small>{user.role.replace(/_/g, " ").toUpperCase()}</small>
+            </div>
+          </div>
+          <div className="mini-list settings-summary-list">
             <div className="mini-list-card">
               <strong>Role</strong>
-              <span>{user.role}</span>
+              <span>{user.role.toUpperCase()}</span>
             </div>
             <div className="mini-list-card">
               <strong>Phone</strong>

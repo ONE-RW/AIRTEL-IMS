@@ -528,7 +528,7 @@ function LoginPage({ onLoginSuccess }: LoginPageProps) {
                   ? "Enter your account email to receive a secure reset link."
                   : isResetPasswordMode
                     ? "Set a new password to regain access to your account."
-                    : "Enter your credentials."}
+                    : "" }
             </p>
           </div>
 
@@ -592,7 +592,7 @@ function LoginPage({ onLoginSuccess }: LoginPageProps) {
                   type="email"
                   value={resetEmail}
                   onChange={(event) => setResetEmail(event.target.value)}
-                  placeholder="enter reset email"
+                  placeholder="Enter your account email"
                   required
                 />
               </label>
@@ -674,7 +674,7 @@ function LoginPage({ onLoginSuccess }: LoginPageProps) {
           ) : (
             <form className="login-form" onSubmit={handleLogin}>
               <label className="field">
-                <span>Email or Phone number</span>
+                <span>Email address or phone number</span>
                 <input
                   type="text"
                   value={identifier}
@@ -682,13 +682,13 @@ function LoginPage({ onLoginSuccess }: LoginPageProps) {
                     setIdentifier(event.target.value);
                     setLoginFieldErrors((currentErrors) => ({ ...currentErrors, identifier: "" }));
                   }}
-                  placeholder=""
+                  placeholder="Enter your email or phone number"
                 />
                 {loginFieldErrors.identifier ? <span className="field-error">{loginFieldErrors.identifier}</span> : null}
               </label>
 
               <label className="field">
-                <span className={password ? "muted-label" : ""}>Enter Password</span>
+                <span>Password</span>
                 <div className="password-field-shell">
                   <input
                     type={showPassword ? "text" : "password"}
@@ -697,7 +697,7 @@ function LoginPage({ onLoginSuccess }: LoginPageProps) {
                       setPassword(event.target.value);
                       setLoginFieldErrors((currentErrors) => ({ ...currentErrors, password: "" }));
                     }}
-                    placeholder=""
+                    placeholder="Enter your password"
                   />
                   <button
                     className="password-toggle-button"

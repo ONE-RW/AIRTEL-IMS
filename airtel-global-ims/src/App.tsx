@@ -127,6 +127,10 @@ function getPathForRole(role: string) {
   return "/admin";
 }
 
+function pathMatchesRoleBase(currentPath: string, basePath: string) {
+  return currentPath === basePath || currentPath.startsWith(`${basePath}/`);
+}
+
 function App() {
   const [pathname, setPathname] = useState(normalizePath(window.location.pathname));
   const [user, setUser] = useState<LoggedInUser | null>(() => {
@@ -171,7 +175,7 @@ function App() {
       return;
     }
 
-    if (user && currentPath !== "/" && currentPath !== expectedPath) {
+    if (user && currentPath !== "/" && !pathMatchesRoleBase(currentPath, expectedPath)) {
       navigateTo(expectedPath, true);
     }
   }, [pathname, user]);

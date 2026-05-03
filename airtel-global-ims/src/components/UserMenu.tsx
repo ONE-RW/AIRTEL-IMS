@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, LogOut, User } from "lucide-react";
+import { ChevronDown, LogOut, UserRound } from "lucide-react";
 import type { LoggedInUser } from "../types";
 import UserAvatar from "./UserAvatar";
 
 type UserMenuProps = {
   user: LoggedInUser;
-  onOpenProfile: () => void;
+  onOpenProfile?: () => void;
   onLogout: () => void;
 };
 
@@ -49,22 +49,27 @@ function UserMenu({ user, onOpenProfile, onLogout }: UserMenuProps) {
         <span className="user-menu-chevron" aria-hidden="true">
           <ChevronDown size={14} strokeWidth={2.4} />
         </span>
+        <span className="user-menu-email-tooltip" aria-hidden="true">
+          {user.email}
+        </span>
       </button>
 
       {isOpen ? (
         <div className="user-menu-dropdown" role="menu">
-          <button
-            className="user-menu-item"
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setIsOpen(false);
-              onOpenProfile();
-            }}
-          >
-            <User size={16} strokeWidth={2.2} />
-            <span>Profile</span>
-          </button>
+          {onOpenProfile ? (
+            <button
+              className="user-menu-item"
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setIsOpen(false);
+                onOpenProfile();
+              }}
+            >
+              <UserRound size={16} strokeWidth={2.2} />
+              <span>Profile</span>
+            </button>
+          ) : null}
           <button
             className="user-menu-item"
             type="button"
