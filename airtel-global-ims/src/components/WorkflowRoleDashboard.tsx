@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { LucideIcon } from "lucide-react";
 import QRCode from "qrcode";
@@ -42,7 +42,7 @@ import { DonutChart, HorizontalBarChart } from "./RoleCharts";
 import UserMenu from "./UserMenu";
 import { fetchJson, getApiMessage, parseApiResponse } from "../api";
 import { API_BASE_URL } from "../config";
-import type { LoggedInUser } from "../types";
+import type { DeviceMonitoringOverview, LoggedInUser } from "../types";
 
 type RoleView = "branch-manager" | "hr" | "it-manager" | "it-infrastructure" | "it-security" | "it-support" | "warehouse" | "employee";
 type StockControlView = "all" | "available" | "returned" | "assigned" | "retired";
@@ -68,6 +68,7 @@ const INTERNAL_SECTION_FALLBACKS = [
   "timeline",
   "reports",
   "notifications",
+  "device-monitoring",
   "settings",
 ];
 
@@ -870,6 +871,7 @@ const roleConfigs: Record<
           { label: "Fulfillment", href: "#fulfillment", icon: FolderInput },
           { label: "Returns", href: "#returns", icon: RotateCcw },
           { label: "Stock", href: "#stock", icon: Boxes },
+          { label: "Device Monitoring", href: "#device-monitoring", icon: ShieldCheck },
           { label: "Timeline", href: "#timeline", icon: FileChartColumn },
         ],
       },
@@ -941,6 +943,17 @@ const roleConfigs: Record<
       },
     ],
   },
+};
+
+const emptyDeviceMonitoringOverview: DeviceMonitoringOverview = {
+  generatedAt: "",
+  summary: {
+    trackedAssets: 0,
+    activeAgents: 0,
+    onlineRecently: 0,
+    openAlerts: 0,
+  },
+  records: [],
 };
 
 function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: WorkflowRoleDashboardProps) {
@@ -1053,6 +1066,13 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
   const [isStockListOpen, setIsStockListOpen] = useState(true);
   const [stockControlView, setStockControlView] = useState<StockControlView>("available");
   const [exportFormat, setExportFormat] = useState<ExportFormat>("html");
+  const [deviceMonitoringOverview, setDeviceMonitoringOverview] = useState<DeviceMonitoringOverview>(emptyDeviceMonitoringOverview);
+  const [isDeviceMonitoringLoading, setIsDeviceMonitoringLoading] = useState(false);
+  const [isCreatingSampleDevice, setIsCreatingSampleDevice] = useState(false);
+  const [sampleDeviceComputerName, setSampleDeviceComputerName] = useState("");
+  const [selectedMonitoringAssetTag, setSelectedMonitoringAssetTag] = useState("");
+  const monitoringQuickStartRef = useRef<HTMLElement | null>(null);
+  const monitoringFeedRef = useRef<HTMLElement | null>(null);
   const [reportExportKey, setReportExportKey] = useState("all");
   const [reportExportScheduleDate, setReportExportScheduleDate] = useState("");
   const [requestPageByKey, setRequestPageByKey] = useState<Record<string, number>>({});
@@ -1186,6 +1206,118 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
   useEffect(() => {
     void loadTransferWorkspace();
   }, [roleView, user.id]);
+
+  const loadDeviceMonitoringOverview = async () => {
+    if (roleView !== "it-support") {
+      setDeviceMonitoringOverview(emptyDeviceMonitoringOverview);
+      return;
+    }
+
+    setIsDeviceMonitoringLoading(true);
+
+    try {
+      const { response, data } = await fetchJson<DeviceMonitoringOverview>(`${API_BASE_URL}/device-monitoring/overview?userId=${user.id}`);
+
+      if (!response.ok || !data) {
+        throw new Error(getApiMessage(data, "Failed to load device monitoring data."));
+      }
+
+      setDeviceMonitoringOverview(data);
+      setSelectedMonitoringAssetTag((current) => current || data.records[0]?.assetTag || "");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to load device monitoring data.");
+    } finally {
+      setIsDeviceMonitoringLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadDeviceMonitoringOverview();
+  }, [roleView, user.id]);
+
+  const downloadBlobResponse = async (endpoint: string, fallbackFileName: string) => {
+    const response = await fetch(endpoint);
+    if (!response.ok) {
+      const data = await parseApiResponse<{ message?: string }>(response);
+      throw new Error(getApiMessage(data, "Download failed."));
+    }
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = getDownloadFileName(response, fallbackFileName);
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleCreateSampleMonitoredDevice = async () => {
+    setIsCreatingSampleDevice(true);
+    setActionError("");
+    setActionMessage("");
+
+    try {
+      const { response, data } = await fetchJson<{ message?: string; equipment?: { assetTag: string } }>(`${API_BASE_URL}/device-monitoring/sample-device`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          actorUserId: user.id,
+          computerName: sampleDeviceComputerName,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(getApiMessage(data, "Failed to create sample device."));
+      }
+
+      setActionMessage(data?.message || "Sample monitored device created.");
+      setSelectedMonitoringAssetTag(data?.equipment?.assetTag || "");
+      setSampleDeviceComputerName("");
+      await loadDashboard();
+      await loadDeviceMonitoringOverview();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to create sample device.");
+    } finally {
+      setIsCreatingSampleDevice(false);
+    }
+  };
+
+  const handleDownloadMonitoringAsset = async (file: "AirtelIMSDeviceAgent.exe" | "install-agent.ps1" | "README.md" | "requirements.txt") => {
+    setActionError("");
+    setActionMessage("");
+
+    try {
+      await downloadBlobResponse(`${API_BASE_URL}/device-monitoring/download?userId=${user.id}&file=${encodeURIComponent(file)}`, file);
+      setActionMessage(`${file} downloaded.`);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Unable to download monitoring asset.");
+    }
+  };
+
+  const handleDownloadMonitoringConfig = async () => {
+    if (!selectedMonitoringAssetTag) {
+      setActionError("Select or create a monitored asset first.");
+      return;
+    }
+
+    setActionError("");
+    setActionMessage("");
+
+    try {
+      await downloadBlobResponse(
+        `${API_BASE_URL}/device-monitoring/config?userId=${user.id}&assetTag=${encodeURIComponent(selectedMonitoringAssetTag)}`,
+        `agent-config-${selectedMonitoringAssetTag}.json`,
+      );
+      setActionMessage("Monitoring config downloaded.");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Unable to download monitoring config.");
+    }
+  };
+
+  const scrollToMonitoringArea = (target: "quick-start" | "feed") => {
+    const element = target === "quick-start" ? monitoringQuickStartRef.current : monitoringFeedRef.current;
+    element?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   const categories = dashboardData?.categories ?? [];
   const equipment = dashboardData?.equipment ?? [];
@@ -10275,6 +10407,177 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
     );
   };
 
+  const renderDeviceMonitoringSection = () => (
+    <section className="dashboard-panel wide-panel">
+      <div className="panel-header">
+        <div>
+          <h3>Device Monitoring Lab</h3>
+          <p className="dashboard-subtitle">
+            Create a sample monitored asset, download the single-file agent bundle, run it on your workstation, and verify live telemetry inside IMS.
+          </p>
+        </div>
+        <div className="panel-header-actions">
+          <button className="secondary-btn compact-btn" type="button" onClick={() => void loadDeviceMonitoringOverview()}>
+            Refresh feed
+          </button>
+        </div>
+      </div>
+
+      <section className="dashboard-card-grid">
+        <OverviewShortcutCard
+          title="Tracked Assets"
+          value={deviceMonitoringOverview.summary.trackedAssets}
+          actionLabel="Refresh feed"
+          onClick={() => {
+            void loadDeviceMonitoringOverview();
+            scrollToMonitoringArea("feed");
+          }}
+          kicker="Monitoring"
+          insight="Assets available in this monitoring lane."
+        />
+        <OverviewShortcutCard
+          title="Active Agents"
+          value={deviceMonitoringOverview.summary.activeAgents}
+          actionLabel="Open feed"
+          onClick={() => scrollToMonitoringArea("feed")}
+          kicker="Monitoring"
+          insight="Devices that already registered the agent."
+        />
+        <OverviewShortcutCard
+          title="Online Recently"
+          value={deviceMonitoringOverview.summary.onlineRecently}
+          actionLabel="Check status"
+          onClick={() => scrollToMonitoringArea("feed")}
+          kicker="Monitoring"
+          insight="Seen in the last 15 minutes."
+        />
+        <OverviewShortcutCard
+          title="Open Alerts"
+          value={deviceMonitoringOverview.summary.openAlerts}
+          actionLabel="Inspect setup"
+          onClick={() => scrollToMonitoringArea("quick-start")}
+          kicker="Monitoring"
+          insight="Monitoring alerts needing review."
+        />
+      </section>
+
+      <div className="dashboard-bottom-row report-bottom-grid report-single-grid">
+        <div className="report-panel">
+          <div className="subpanel-header" ref={monitoringQuickStartRef}>
+            <h4>Quick Start</h4>
+          </div>
+          <div className="simple-form">
+            <label className="field">
+              <span>Sample computer name</span>
+              <input
+                value={sampleDeviceComputerName}
+                onChange={(event) => setSampleDeviceComputerName(event.target.value)}
+                placeholder="Optional, for example ONE-LAPTOP"
+              />
+            </label>
+            <button className="primary-btn form-submit-btn" type="button" onClick={() => void handleCreateSampleMonitoredDevice()} disabled={isCreatingSampleDevice}>
+              {isCreatingSampleDevice ? "Creating..." : "Create sample monitored asset"}
+            </button>
+            <label className="field" style={{ marginTop: "1rem" }}>
+              <span>Asset tag for config</span>
+              <select value={selectedMonitoringAssetTag} onChange={(event) => setSelectedMonitoringAssetTag(event.target.value)}>
+                <option value="">Select monitored asset</option>
+                {deviceMonitoringOverview.records.map((record) => (
+                  <option key={record.assetTag} value={record.assetTag}>
+                    {record.assetTag} / {record.equipmentName}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="table-action-group" style={{ flexWrap: "wrap", marginTop: "0.75rem" }}>
+              <button className="secondary-btn compact-btn" type="button" onClick={() => void handleDownloadMonitoringAsset("AirtelIMSDeviceAgent.exe")}>
+                <Download size={16} />
+                EXE
+              </button>
+              <button className="secondary-btn compact-btn" type="button" onClick={() => void handleDownloadMonitoringAsset("install-agent.ps1")}>
+                <Download size={16} />
+                Installer
+              </button>
+              <button className="secondary-btn compact-btn" type="button" onClick={() => void handleDownloadMonitoringAsset("README.md")}>
+                <Download size={16} />
+                Guide
+              </button>
+              <button className="primary-btn compact-btn" type="button" onClick={() => void handleDownloadMonitoringConfig()}>
+                <Download size={16} />
+                Config
+              </button>
+            </div>
+          </div>
+
+          <div className="mini-list" style={{ marginTop: "1rem" }}>
+            <article className="mini-list-card">
+              <strong>1. Download the EXE and config</strong>
+              <span>Use the EXE for testing on your machine without a Python install.</span>
+            </article>
+            <article className="mini-list-card">
+              <strong>2. Run a quick smoke test</strong>
+              <span>`AirtelIMSDeviceAgent.exe --once --config agent-config-YOURTAG.json`</span>
+            </article>
+            <article className="mini-list-card">
+              <strong>3. Refresh the live feed</strong>
+              <span>Once the device checks in, the latest telemetry and recommendation will appear below.</span>
+            </article>
+          </div>
+        </div>
+      </div>
+
+      <div className="dashboard-bottom-row report-bottom-grid report-single-grid">
+        <div className="report-panel">
+          <div className="subpanel-header" ref={monitoringFeedRef}>
+            <h4>Live Monitoring Feed</h4>
+            <span>{isDeviceMonitoringLoading ? "Refreshing..." : `${deviceMonitoringOverview.records.length} records`}</span>
+          </div>
+          <div className="user-table compact-table">
+            <div className="user-table-head">
+              <span>Asset</span>
+              <span>Health</span>
+              <span>Latest Telemetry</span>
+              <span>Recommendation</span>
+            </div>
+            {deviceMonitoringOverview.records.map((record) => (
+              <div className="user-table-row" key={record.equipmentId}>
+                <div className="user-primary-cell">
+                  <strong>{record.assetTag}</strong>
+                  <span>{record.agent?.hostname || record.computerName || record.equipmentName}</span>
+                </div>
+                <div className="user-secondary-cell">
+                  <strong>
+                    <span className={`status-badge status-${String(record.deviceHealth || "pending").toLowerCase().replace(/\s+/g, "-")}`}>
+                      {record.deviceHealth || "unknown"}
+                    </span>
+                  </strong>
+                  <span>{record.branchName || "No branch"}</span>
+                </div>
+                <div className="user-secondary-cell">
+                  <strong>CPU {record.latestMetric?.cpuUsage ?? 0}% / RAM {record.latestMetric?.ramUsage ?? 0}%</strong>
+                  <span>
+                    {record.latestMetric
+                      ? `Disk ${record.latestMetric.diskUsage}% • ${new Date(record.latestMetric.recordedAt || "").toLocaleString()}`
+                      : "No telemetry yet"}
+                  </span>
+                </div>
+                <div className="user-secondary-cell">
+                  <strong>{record.recommendation?.label || "Waiting for model output"}</strong>
+                  <span>
+                    {record.recommendation?.confidenceScore !== null && record.recommendation?.confidenceScore !== undefined
+                      ? `Confidence ${record.recommendation.confidenceScore}%`
+                      : "No confidence score yet"}
+                  </span>
+                </div>
+              </div>
+            ))}
+            {!deviceMonitoringOverview.records.length ? <p className="loading-text">No monitored assets yet. Create one and run the agent to start testing.</p> : null}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+
   const renderSettingsSection = () => <AccountSettingsPanel user={user} onUserUpdate={onUserUpdate} />;
 
   const renderSection = () => {
@@ -10344,6 +10647,10 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
 
     if (activeSection === "reports") {
       return renderReportsSection();
+    }
+
+    if (activeSection === "device-monitoring" && roleView === "it-support") {
+      return renderDeviceMonitoringSection();
     }
 
     if (activeSection === "notifications") {

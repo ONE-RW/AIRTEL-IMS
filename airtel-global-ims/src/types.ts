@@ -196,3 +196,49 @@ export type AdminSystemControls = {
   };
   backups: BackupSnapshot[];
 };
+
+export type DeviceMonitoringRecord = {
+  equipmentId: number;
+  assetTag: string;
+  equipmentName: string;
+  computerName: string | null;
+  branchName: string | null;
+  status: string;
+  deviceHealth: string | null;
+  agent: {
+    hostname: string;
+    operatingSystem: string | null;
+    version: string | null;
+    lastSeenAt: string | null;
+  } | null;
+  latestMetric: {
+    id: number;
+    cpuUsage: number;
+    ramUsage: number;
+    diskUsage: number;
+    batteryHealth: number | null;
+    batteryLevel: number | null;
+    networkLatency: number | null;
+    packetLoss: number | null;
+    temperature: number | null;
+    uptimeSeconds: number;
+    recordedAt: string | null;
+  } | null;
+  recommendation: {
+    label: string;
+    confidenceScore: number | null;
+    modelVersion: string | null;
+    generatedAt: string | null;
+  } | null;
+};
+
+export type DeviceMonitoringOverview = {
+  generatedAt: string;
+  summary: {
+    trackedAssets: number;
+    activeAgents: number;
+    onlineRecently: number;
+    openAlerts: number;
+  };
+  records: DeviceMonitoringRecord[];
+};

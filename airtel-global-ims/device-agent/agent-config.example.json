@@ -1,0 +1,6 @@
+{
+  "apiUrl": "http://127.0.0.1:4000",
+  "apiKey": "airtel-device-agent-dev-key",
+  "assetTag": "TAG-1001",
+  "interval": 300
+}

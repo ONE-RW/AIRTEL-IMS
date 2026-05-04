@@ -653,6 +653,86 @@ CREATE TABLE maintenance_records (
     FOREIGN KEY (assigned_to) REFERENCES users(id)
 );
 
+CREATE TABLE device_agents (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  equipment_id BIGINT NOT NULL,
+  device_uuid VARCHAR(120) NOT NULL,
+  hostname VARCHAR(160) NOT NULL,
+  operating_system VARCHAR(120) NULL,
+  agent_version VARCHAR(40) NULL,
+  last_seen_at TIMESTAMP NULL,
+  last_ip_address VARCHAR(80) NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_device_agent_uuid (device_uuid),
+  INDEX idx_device_agents_equipment (equipment_id),
+  INDEX idx_device_agents_last_seen (last_seen_at),
+  CONSTRAINT fk_device_agents_equipment
+    FOREIGN KEY (equipment_id) REFERENCES equipment(id)
+);
+
+CREATE TABLE device_metrics (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  equipment_id BIGINT NOT NULL,
+  agent_id BIGINT NULL,
+  cpu_usage DECIMAL(5, 2) NOT NULL DEFAULT 0,
+  ram_usage DECIMAL(5, 2) NOT NULL DEFAULT 0,
+  disk_usage DECIMAL(5, 2) NOT NULL DEFAULT 0,
+  disk_health DECIMAL(5, 2) NULL,
+  battery_health DECIMAL(5, 2) NULL,
+  battery_level DECIMAL(5, 2) NULL,
+  network_latency DECIMAL(8, 2) NULL,
+  packet_loss DECIMAL(5, 2) NULL,
+  temperature DECIMAL(5, 2) NULL,
+  uptime_seconds BIGINT NOT NULL DEFAULT 0,
+  workload_intensity DECIMAL(5, 2) NULL,
+  error_count INT NOT NULL DEFAULT 0,
+  metrics_payload JSON NULL,
+  recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_device_metrics_equipment (equipment_id, recorded_at),
+  INDEX idx_device_metrics_agent (agent_id, recorded_at),
+  CONSTRAINT fk_device_metrics_equipment
+    FOREIGN KEY (equipment_id) REFERENCES equipment(id),
+  CONSTRAINT fk_device_metrics_agent
+    FOREIGN KEY (agent_id) REFERENCES device_agents(id)
+);
+
+CREATE TABLE alerts (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  equipment_id BIGINT NOT NULL,
+  metric_id BIGINT NULL,
+  alert_type VARCHAR(80) NOT NULL,
+  severity ENUM('low', 'medium', 'high', 'critical') NOT NULL DEFAULT 'medium',
+  status ENUM('open', 'acknowledged', 'resolved') NOT NULL DEFAULT 'open',
+  message TEXT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_alerts_equipment (equipment_id, created_at),
+  INDEX idx_alerts_status (status, severity),
+  CONSTRAINT fk_alerts_equipment
+    FOREIGN KEY (equipment_id) REFERENCES equipment(id),
+  CONSTRAINT fk_alerts_metric
+    FOREIGN KEY (metric_id) REFERENCES device_metrics(id)
+);
+
+CREATE TABLE ml_recommendations (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  equipment_id BIGINT NOT NULL,
+  metric_id BIGINT NULL,
+  recommendation VARCHAR(120) NOT NULL,
+  confidence_score DECIMAL(5, 2) NULL,
+  probability DECIMAL(7, 4) NULL,
+  model_version VARCHAR(60) NULL,
+  reasons_json JSON NULL,
+  generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_ml_recommendations_equipment (equipment_id, generated_at),
+  CONSTRAINT fk_ml_recommendations_equipment
+    FOREIGN KEY (equipment_id) REFERENCES equipment(id),
+  CONSTRAINT fk_ml_recommendations_metric
+    FOREIGN KEY (metric_id) REFERENCES device_metrics(id)
+);
+
 CREATE TABLE password_reset_tokens (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   user_id BIGINT NOT NULL,

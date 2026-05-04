@@ -54,6 +54,7 @@ const hrmsEmployeeByIdPathTemplate = process.env.HRMS_EMPLOYEE_BY_ID_PATH || "/a
 const hrmsApiKeyHeader = process.env.HRMS_API_KEY_HEADER || "x-api-key";
 const hrmsUserEmailHeader = process.env.HRMS_USER_EMAIL_HEADER || "x-ims-user-email";
 const hrmsUserRoleHeader = process.env.HRMS_USER_ROLE_HEADER || "x-ims-user-role";
+const deviceAgentApiKey = process.env.DEVICE_AGENT_API_KEY || "airtel-device-agent-dev-key";
 let hasLoggedHrmsUnavailableWarning = false;
 const openAiApiKey = process.env.OPENAI_API_KEY || "";
 const openAiGeneralChatModel = process.env.OPENAI_GENERAL_CHAT_MODEL || "gpt-5.4-mini";
@@ -1970,6 +1971,82 @@ async function ensureMaintenanceRecordsTable() {
   `);
 }
 
+async function ensureDeviceMonitoringTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS device_agents (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      equipment_id BIGINT NOT NULL,
+      device_uuid VARCHAR(120) NOT NULL,
+      hostname VARCHAR(160) NOT NULL,
+      operating_system VARCHAR(120) NULL,
+      agent_version VARCHAR(40) NULL,
+      last_seen_at TIMESTAMP NULL,
+      last_ip_address VARCHAR(80) NULL,
+      is_active TINYINT(1) NOT NULL DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_device_agent_uuid (device_uuid),
+      INDEX idx_device_agents_equipment (equipment_id),
+      INDEX idx_device_agents_last_seen (last_seen_at)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS device_metrics (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      equipment_id BIGINT NOT NULL,
+      agent_id BIGINT NULL,
+      cpu_usage DECIMAL(5,2) NOT NULL DEFAULT 0,
+      ram_usage DECIMAL(5,2) NOT NULL DEFAULT 0,
+      disk_usage DECIMAL(5,2) NOT NULL DEFAULT 0,
+      disk_health DECIMAL(5,2) NULL,
+      battery_health DECIMAL(5,2) NULL,
+      battery_level DECIMAL(5,2) NULL,
+      network_latency DECIMAL(8,2) NULL,
+      packet_loss DECIMAL(5,2) NULL,
+      temperature DECIMAL(5,2) NULL,
+      uptime_seconds BIGINT NOT NULL DEFAULT 0,
+      workload_intensity DECIMAL(5,2) NULL,
+      error_count INT NOT NULL DEFAULT 0,
+      metrics_payload JSON NULL,
+      recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_device_metrics_equipment (equipment_id, recorded_at),
+      INDEX idx_device_metrics_agent (agent_id, recorded_at)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS alerts (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      equipment_id BIGINT NOT NULL,
+      metric_id BIGINT NULL,
+      alert_type VARCHAR(80) NOT NULL,
+      severity ENUM('low', 'medium', 'high', 'critical') NOT NULL DEFAULT 'medium',
+      status ENUM('open', 'acknowledged', 'resolved') NOT NULL DEFAULT 'open',
+      message TEXT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_alerts_equipment (equipment_id, created_at),
+      INDEX idx_alerts_status (status, severity)
+    )
+  `).catch(() => undefined);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ml_recommendations (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      equipment_id BIGINT NOT NULL,
+      metric_id BIGINT NULL,
+      recommendation VARCHAR(120) NOT NULL,
+      confidence_score DECIMAL(5,2) NULL,
+      probability DECIMAL(7,4) NULL,
+      model_version VARCHAR(60) NULL,
+      reasons_json JSON NULL,
+      generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_ml_recommendations_equipment (equipment_id, generated_at)
+    )
+  `);
+}
+
 let replacementMlModel = null;
 let iotFailureModel = null;
 const IOT_FAILURE_FEATURE_NAMES = [
@@ -2133,6 +2210,292 @@ function buildIotFailureFeatureVectorFromEquipment(equipmentRow, assignmentHours
   return {
     featureNames: IOT_FAILURE_FEATURE_NAMES,
     values: [cpuUsage, memoryUsage, batteryLevel, networkLatency, packetLoss, temperature, uptime, workloadIntensity, errorCount],
+  };
+}
+
+function getClientIpAddress(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return forwarded || req.socket?.remoteAddress || null;
+}
+
+function canAccessDeviceMonitoring(actor) {
+  const allowedRoles = new Set([
+    "admin",
+    "IT Director",
+    "IT infrastructure manager",
+    "IT security manager",
+    "IT Support engineer",
+    "IT officer",
+  ]);
+  return Boolean(actor && allowedRoles.has(String(actor.role_name || "")));
+}
+
+function getDeviceAgentRequestKey(req) {
+  return String(req.headers["x-device-agent-key"] || req.headers.authorization || "")
+    .replace(/^Bearer\s+/i, "")
+    .trim();
+}
+
+function isAuthorizedDeviceAgentRequest(req) {
+  const candidate = getDeviceAgentRequestKey(req);
+  return Boolean(candidate) && candidate === deviceAgentApiKey;
+}
+
+function coerceFiniteNumber(value, fallback = null) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function toMetricScore(value, fallback = 0) {
+  const numeric = coerceFiniteNumber(value, fallback);
+  if (numeric === null) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(100, numeric));
+}
+
+function deriveDeviceHealthLabel({ cpuUsage, ramUsage, diskUsage, batteryHealth, temperature, packetLoss }) {
+  const riskSignals = [
+    toMetricScore(cpuUsage),
+    toMetricScore(ramUsage),
+    toMetricScore(diskUsage),
+    toMetricScore(100 - (coerceFiniteNumber(batteryHealth, 100) ?? 100)),
+    Math.min(toMetricScore(temperature, 35) * 1.4, 100),
+    Math.min(toMetricScore(packetLoss, 0) * 15, 100),
+  ];
+  const risk = riskSignals.reduce((sum, current) => sum + current, 0) / riskSignals.length;
+
+  if (risk >= 78) {
+    return "critical";
+  }
+  if (risk >= 62) {
+    return "poor";
+  }
+  if (risk >= 42) {
+    return "fair";
+  }
+  return "healthy";
+}
+
+function buildDeviceMonitoringAlerts(metrics) {
+  const alerts = [];
+  const addAlert = (alertType, severity, message) => {
+    alerts.push({ alertType, severity, message });
+  };
+
+  if (toMetricScore(metrics.cpuUsage) >= 90) {
+    addAlert("high_cpu_usage", "high", "CPU usage is persistently above 90%.");
+  } else if (toMetricScore(metrics.cpuUsage) >= 80) {
+    addAlert("cpu_usage_warning", "medium", "CPU usage is above the recommended operating range.");
+  }
+
+  if (toMetricScore(metrics.ramUsage) >= 92) {
+    addAlert("high_memory_usage", "high", "RAM usage is critically high.");
+  } else if (toMetricScore(metrics.ramUsage) >= 85) {
+    addAlert("memory_usage_warning", "medium", "RAM usage is elevated and should be reviewed.");
+  }
+
+  if (toMetricScore(metrics.diskUsage) >= 95) {
+    addAlert("disk_capacity_critical", "critical", "Disk usage exceeded 95%.");
+  } else if (toMetricScore(metrics.diskUsage) >= 85) {
+    addAlert("disk_capacity_warning", "medium", "Disk usage is above 85%.");
+  }
+
+  if (coerceFiniteNumber(metrics.batteryHealth) !== null && toMetricScore(metrics.batteryHealth) <= 55) {
+    addAlert("battery_health_degraded", "high", "Battery health dropped below 55%.");
+  } else if (coerceFiniteNumber(metrics.batteryHealth) !== null && toMetricScore(metrics.batteryHealth) <= 70) {
+    addAlert("battery_health_warning", "medium", "Battery health is degrading.");
+  }
+
+  if (coerceFiniteNumber(metrics.temperature) !== null && Number(metrics.temperature) >= 75) {
+    addAlert("temperature_critical", "critical", "Device temperature is critically high.");
+  } else if (coerceFiniteNumber(metrics.temperature) !== null && Number(metrics.temperature) >= 65) {
+    addAlert("temperature_warning", "high", "Device temperature is elevated.");
+  }
+
+  if (coerceFiniteNumber(metrics.packetLoss) !== null && Number(metrics.packetLoss) >= 5) {
+    addAlert("packet_loss_high", "high", "Packet loss is above 5%.");
+  }
+
+  if (coerceFiniteNumber(metrics.networkLatency) !== null && Number(metrics.networkLatency) >= 250) {
+    addAlert("network_latency_high", "medium", "Network latency is above 250ms.");
+  }
+
+  return alerts;
+}
+
+async function getEquipmentByAssetTag(assetTag) {
+  const [rows] = await pool.query(
+    `
+      SELECT id, asset_tag, computer_name, serial_number, device_health, equipment_name, status
+      FROM equipment
+      WHERE asset_tag = ?
+      LIMIT 1
+    `,
+    [assetTag],
+  );
+  return rows[0] || null;
+}
+
+async function upsertDeviceAgentRecord({ equipmentId, deviceUuid, hostname, operatingSystem, agentVersion, ipAddress }) {
+  await pool.query(
+    `
+      INSERT INTO device_agents (
+        equipment_id,
+        device_uuid,
+        hostname,
+        operating_system,
+        agent_version,
+        last_seen_at,
+        last_ip_address,
+        is_active
+      ) VALUES (?, ?, ?, ?, ?, NOW(), ?, 1)
+      ON DUPLICATE KEY UPDATE
+        equipment_id = VALUES(equipment_id),
+        hostname = VALUES(hostname),
+        operating_system = VALUES(operating_system),
+        agent_version = VALUES(agent_version),
+        last_seen_at = NOW(),
+        last_ip_address = VALUES(last_ip_address),
+        is_active = 1
+    `,
+    [equipmentId, deviceUuid, hostname, operatingSystem || null, agentVersion || null, ipAddress || null],
+  );
+
+  const [rows] = await pool.query(
+    `
+      SELECT id, equipment_id, device_uuid, hostname, operating_system, agent_version, last_seen_at
+      FROM device_agents
+      WHERE device_uuid = ?
+      LIMIT 1
+    `,
+    [deviceUuid],
+  );
+
+  return rows[0] || null;
+}
+
+async function fetchRecentDeviceContext(equipmentId) {
+  const [issueRows] = await pool.query(
+    `
+      SELECT COUNT(*) AS issue_count
+      FROM issues
+      WHERE equipment_id = ?
+    `,
+    [equipmentId],
+  );
+  const [maintenanceRows] = await pool.query(
+    `
+      SELECT COUNT(*) AS repair_count
+      FROM maintenance_records
+      WHERE equipment_id = ?
+    `,
+    [equipmentId],
+  );
+  const [assignmentRows] = await pool.query(
+    `
+      SELECT assigned_at
+      FROM assignments
+      WHERE equipment_id = ? AND status = 'active'
+      ORDER BY assigned_at DESC
+      LIMIT 1
+    `,
+    [equipmentId],
+  );
+
+  const assignmentHours = assignmentRows[0]?.assigned_at
+    ? Math.max((Date.now() - new Date(assignmentRows[0].assigned_at).getTime()) / (1000 * 60 * 60), 0)
+    : 0;
+
+  return {
+    assignmentHours,
+    issueCount: Number(issueRows[0]?.issue_count || 0),
+    repairCount: Number(maintenanceRows[0]?.repair_count || 0),
+  };
+}
+
+async function generateDeviceRecommendation({ equipment, metricId, metrics }) {
+  const context = await fetchRecentDeviceContext(equipment.id);
+  const featureVector = {
+    featureNames: IOT_FAILURE_FEATURE_NAMES,
+    values: [
+      toMetricScore(metrics.cpuUsage),
+      toMetricScore(metrics.ramUsage),
+      toMetricScore(metrics.batteryLevel, 100),
+      coerceFiniteNumber(metrics.networkLatency, 0) ?? 0,
+      coerceFiniteNumber(metrics.packetLoss, 0) ?? 0,
+      coerceFiniteNumber(metrics.temperature, 35) ?? 35,
+      Math.max(Math.round((coerceFiniteNumber(metrics.uptimeSeconds, 0) ?? 0) / 3600), 0),
+      toMetricScore(metrics.workloadIntensity, Math.round((toMetricScore(metrics.cpuUsage) + toMetricScore(metrics.ramUsage)) / 2)),
+      Number(metrics.errorCount || 0),
+    ],
+  };
+
+  const probability = iotFailureModel ? predictReplacementProbability(featureVector, iotFailureModel) : null;
+  const recommendation = typeof probability === "number"
+    ? probability >= 0.7
+      ? "Replacement Recommended"
+      : probability >= 0.4
+        ? "Maintenance Recommended"
+        : "Healthy - No Action Required"
+    : "Monitoring Active - Model Unavailable";
+
+  const reasons = [];
+  if (toMetricScore(metrics.cpuUsage) >= 80) {
+    reasons.push(`CPU usage is elevated at ${toMetricScore(metrics.cpuUsage).toFixed(0)}%.`);
+  }
+  if (toMetricScore(metrics.ramUsage) >= 85) {
+    reasons.push(`RAM usage is elevated at ${toMetricScore(metrics.ramUsage).toFixed(0)}%.`);
+  }
+  if (coerceFiniteNumber(metrics.batteryHealth) !== null && toMetricScore(metrics.batteryHealth) <= 70) {
+    reasons.push(`Battery health is reduced to ${toMetricScore(metrics.batteryHealth).toFixed(0)}%.`);
+  }
+  if (coerceFiniteNumber(metrics.temperature) !== null && Number(metrics.temperature) >= 65) {
+    reasons.push(`Temperature reached ${Number(metrics.temperature).toFixed(1)}C.`);
+  }
+  if (!reasons.length) {
+    reasons.push("Latest telemetry is within the expected operating range.");
+  }
+  if (context.repairCount > 0) {
+    reasons.push(`Historical maintenance count: ${context.repairCount}.`);
+  }
+  if (context.issueCount > 0) {
+    reasons.push(`Open and past issue records: ${context.issueCount}.`);
+  }
+
+  const confidenceScore = typeof probability === "number"
+    ? Math.max(0, Math.min(100, Math.round(probability * 100)))
+    : null;
+
+  await pool.query(
+    `
+      INSERT INTO ml_recommendations (
+        equipment_id,
+        metric_id,
+        recommendation,
+        confidence_score,
+        probability,
+        model_version,
+        reasons_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `,
+    [
+      equipment.id,
+      metricId,
+      recommendation,
+      confidenceScore,
+      probability,
+      iotFailureModel?.version || "untrained",
+      JSON.stringify(reasons),
+    ],
+  );
+
+  return {
+    recommendation,
+    confidenceScore,
+    probability,
+    modelVersion: iotFailureModel?.version || "untrained",
+    reasons,
   };
 }
 
@@ -7353,6 +7716,7 @@ async function ensureOperationalDemoData() {
   await ensureAuthProvidersTable();
   await ensureAssetLifecycleEventsTable();
   await ensureMaintenanceRecordsTable();
+  await ensureDeviceMonitoringTables();
   await ensureUserIdentifierSecurityColumns();
   await ensureReplacementMlModelsTable();
   await ensureIotFailureModel();
@@ -7709,6 +8073,552 @@ app.get("/api/health", async (_req, res) => {
       message: "Database connection failed",
       details: error.message,
     });
+  }
+});
+
+app.post("/api/device-agent/register", async (req, res) => {
+  if (!isAuthorizedDeviceAgentRequest(req)) {
+    return res.status(401).json({ message: "Unauthorized device agent request." });
+  }
+
+  const assetTag = String(req.body?.assetTag || "").trim();
+  const deviceUuid = String(req.body?.deviceUuid || "").trim();
+  const hostname = String(req.body?.hostname || "").trim();
+  const operatingSystem = String(req.body?.operatingSystem || "").trim();
+  const agentVersion = String(req.body?.agentVersion || "").trim();
+
+  if (!assetTag || !deviceUuid || !hostname) {
+    return res.status(400).json({ message: "assetTag, deviceUuid, and hostname are required." });
+  }
+
+  try {
+    const equipment = await getEquipmentByAssetTag(assetTag);
+    if (!equipment) {
+      return res.status(404).json({ message: "No equipment record exists for the supplied asset tag." });
+    }
+
+    const agent = await upsertDeviceAgentRecord({
+      equipmentId: Number(equipment.id),
+      deviceUuid,
+      hostname,
+      operatingSystem,
+      agentVersion,
+      ipAddress: getClientIpAddress(req),
+    });
+
+    if (!equipment.computer_name || equipment.computer_name !== hostname) {
+      await pool.query("UPDATE equipment SET computer_name = ? WHERE id = ?", [hostname, Number(equipment.id)]);
+    }
+
+    return res.status(201).json({
+      message: "Device agent registered successfully.",
+      agent: {
+        id: agent?.id || null,
+        equipmentId: Number(equipment.id),
+        assetTag: equipment.asset_tag,
+        hostname,
+        operatingSystem: operatingSystem || null,
+        agentVersion: agentVersion || null,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ message: normalizeError(error) });
+  }
+});
+
+app.post("/api/device-agent/metrics", async (req, res) => {
+  if (!isAuthorizedDeviceAgentRequest(req)) {
+    return res.status(401).json({ message: "Unauthorized device agent request." });
+  }
+
+  const assetTag = String(req.body?.assetTag || "").trim();
+  const deviceUuid = String(req.body?.deviceUuid || "").trim();
+  const hostname = String(req.body?.hostname || "").trim();
+  const operatingSystem = String(req.body?.operatingSystem || "").trim();
+  const agentVersion = String(req.body?.agentVersion || "").trim();
+  const metricsPayload = req.body?.metrics ?? {};
+
+  if (!assetTag || !deviceUuid || !hostname) {
+    return res.status(400).json({ message: "assetTag, deviceUuid, and hostname are required." });
+  }
+
+  try {
+    const equipment = await getEquipmentByAssetTag(assetTag);
+    if (!equipment) {
+      return res.status(404).json({ message: "No equipment record exists for the supplied asset tag." });
+    }
+
+    const agent = await upsertDeviceAgentRecord({
+      equipmentId: Number(equipment.id),
+      deviceUuid,
+      hostname,
+      operatingSystem,
+      agentVersion,
+      ipAddress: getClientIpAddress(req),
+    });
+
+    const normalizedMetrics = {
+      cpuUsage: toMetricScore(metricsPayload.cpuUsage),
+      ramUsage: toMetricScore(metricsPayload.ramUsage),
+      diskUsage: toMetricScore(metricsPayload.diskUsage),
+      diskHealth: coerceFiniteNumber(metricsPayload.diskHealth, null),
+      batteryHealth: coerceFiniteNumber(metricsPayload.batteryHealth, null),
+      batteryLevel: coerceFiniteNumber(metricsPayload.batteryLevel, null),
+      networkLatency: coerceFiniteNumber(metricsPayload.networkLatency, null),
+      packetLoss: coerceFiniteNumber(metricsPayload.packetLoss, null),
+      temperature: coerceFiniteNumber(metricsPayload.temperature, null),
+      uptimeSeconds: Math.max(Number(metricsPayload.uptimeSeconds || 0), 0),
+      workloadIntensity: coerceFiniteNumber(metricsPayload.workloadIntensity, null),
+      errorCount: Math.max(Number(metricsPayload.errorCount || 0), 0),
+    };
+
+    const [metricInsert] = await pool.query(
+      `
+        INSERT INTO device_metrics (
+          equipment_id,
+          agent_id,
+          cpu_usage,
+          ram_usage,
+          disk_usage,
+          disk_health,
+          battery_health,
+          battery_level,
+          network_latency,
+          packet_loss,
+          temperature,
+          uptime_seconds,
+          workload_intensity,
+          error_count,
+          metrics_payload
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        Number(equipment.id),
+        agent?.id || null,
+        normalizedMetrics.cpuUsage,
+        normalizedMetrics.ramUsage,
+        normalizedMetrics.diskUsage,
+        normalizedMetrics.diskHealth,
+        normalizedMetrics.batteryHealth,
+        normalizedMetrics.batteryLevel,
+        normalizedMetrics.networkLatency,
+        normalizedMetrics.packetLoss,
+        normalizedMetrics.temperature,
+        normalizedMetrics.uptimeSeconds,
+        normalizedMetrics.workloadIntensity,
+        normalizedMetrics.errorCount,
+        JSON.stringify(metricsPayload),
+      ],
+    );
+
+    const metricId = Number(metricInsert.insertId);
+    const derivedHealth = deriveDeviceHealthLabel(normalizedMetrics);
+    await pool.query(
+      `
+        UPDATE equipment
+        SET computer_name = ?, device_health = ?
+        WHERE id = ?
+      `,
+      [hostname, derivedHealth, Number(equipment.id)],
+    );
+
+    const generatedAlerts = buildDeviceMonitoringAlerts(normalizedMetrics);
+    for (const alert of generatedAlerts) {
+      await pool.query(
+        `
+          INSERT INTO alerts (
+            equipment_id,
+            metric_id,
+            alert_type,
+            severity,
+            status,
+            message
+          ) VALUES (?, ?, ?, ?, 'open', ?)
+        `,
+        [Number(equipment.id), metricId, alert.alertType, alert.severity, alert.message],
+      );
+    }
+
+    const recommendation = await generateDeviceRecommendation({
+      equipment,
+      metricId,
+      metrics: normalizedMetrics,
+    });
+
+    return res.status(201).json({
+      message: "Device metrics ingested successfully.",
+      equipmentId: Number(equipment.id),
+      metricId,
+      alertsCreated: generatedAlerts.length,
+      deviceHealth: derivedHealth,
+      recommendation,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: normalizeError(error) });
+  }
+});
+
+app.get("/api/device-agent/recommendation", async (req, res) => {
+  if (!isAuthorizedDeviceAgentRequest(req)) {
+    return res.status(401).json({ message: "Unauthorized device agent request." });
+  }
+
+  const assetTag = String(req.query.assetTag || "").trim();
+  if (!assetTag) {
+    return res.status(400).json({ message: "assetTag is required." });
+  }
+
+  try {
+    const equipment = await getEquipmentByAssetTag(assetTag);
+    if (!equipment) {
+      return res.status(404).json({ message: "No equipment record exists for the supplied asset tag." });
+    }
+
+    const [rows] = await pool.query(
+      `
+        SELECT recommendation, confidence_score, probability, model_version, reasons_json, generated_at
+        FROM ml_recommendations
+        WHERE equipment_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+      `,
+      [Number(equipment.id)],
+    );
+
+    if (!rows.length) {
+      return res.json({
+        equipmentId: Number(equipment.id),
+        assetTag: equipment.asset_tag,
+        recommendation: "No recommendation generated yet",
+        confidenceScore: null,
+        probability: null,
+        modelVersion: iotFailureModel?.version || "untrained",
+        reasons: [],
+        generatedAt: null,
+      });
+    }
+
+    const latest = rows[0];
+    return res.json({
+      equipmentId: Number(equipment.id),
+      assetTag: equipment.asset_tag,
+      recommendation: latest.recommendation,
+      confidenceScore: latest.confidence_score === null ? null : Number(latest.confidence_score),
+      probability: latest.probability === null ? null : Number(latest.probability),
+      modelVersion: latest.model_version || iotFailureModel?.version || "untrained",
+      reasons: latest.reasons_json ? JSON.parse(latest.reasons_json) : [],
+      generatedAt: latest.generated_at,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: normalizeError(error) });
+  }
+});
+
+app.get("/api/device-monitoring/overview", async (req, res) => {
+  const userId = Number(req.query.userId);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: "A valid user id is required." });
+  }
+
+  try {
+    const actor = await getUserContext(userId);
+    if (!canAccessDeviceMonitoring(actor)) {
+      return res.status(403).json({ message: "You do not have access to device monitoring." });
+    }
+
+    const branchScope = actor.role_name === "admin" || actor.role_name === "IT Director" ? null : Number(actor.branch_id || 0) || null;
+    const [rows] = await pool.query(
+      `
+        SELECT
+          e.id AS equipment_id,
+          e.asset_tag,
+          e.equipment_name,
+          e.computer_name,
+          e.status,
+          e.device_health,
+          e.branch_id,
+          b.name AS branch_name,
+          da.hostname AS agent_hostname,
+          da.operating_system,
+          da.agent_version,
+          da.last_seen_at,
+          dm.id AS metric_id,
+          dm.cpu_usage,
+          dm.ram_usage,
+          dm.disk_usage,
+          dm.battery_health,
+          dm.battery_level,
+          dm.network_latency,
+          dm.packet_loss,
+          dm.temperature,
+          dm.uptime_seconds,
+          dm.recorded_at,
+          mr.recommendation,
+          mr.confidence_score,
+          mr.model_version,
+          mr.generated_at
+        FROM equipment e
+        LEFT JOIN branches b ON b.id = e.branch_id
+        LEFT JOIN device_agents da ON da.equipment_id = e.id
+        LEFT JOIN device_metrics dm ON dm.id = (
+          SELECT dm2.id
+          FROM device_metrics dm2
+          WHERE dm2.equipment_id = e.id
+          ORDER BY dm2.recorded_at DESC, dm2.id DESC
+          LIMIT 1
+        )
+        LEFT JOIN ml_recommendations mr ON mr.id = (
+          SELECT mr2.id
+          FROM ml_recommendations mr2
+          WHERE mr2.equipment_id = e.id
+          ORDER BY mr2.generated_at DESC, mr2.id DESC
+          LIMIT 1
+        )
+        WHERE (? IS NULL OR e.branch_id = ?)
+        ORDER BY COALESCE(dm.recorded_at, da.last_seen_at, e.updated_at, e.created_at) DESC, e.id DESC
+        LIMIT 30
+      `,
+      [branchScope, branchScope],
+    );
+
+    const [openAlertRows] = await pool.query(
+      `
+        SELECT COUNT(*) AS total
+        FROM alerts a
+        INNER JOIN equipment e ON e.id = a.equipment_id
+        WHERE a.status = 'open'
+          AND (? IS NULL OR e.branch_id = ?)
+      `,
+      [branchScope, branchScope],
+    );
+
+    const [activeAgentRows] = await pool.query(
+      `
+        SELECT COUNT(DISTINCT da.id) AS total
+        FROM device_agents da
+        INNER JOIN equipment e ON e.id = da.equipment_id
+        WHERE da.is_active = 1
+          AND (? IS NULL OR e.branch_id = ?)
+      `,
+      [branchScope, branchScope],
+    );
+
+    return res.json({
+      generatedAt: new Date().toISOString(),
+      summary: {
+        trackedAssets: rows.length,
+        activeAgents: Number(activeAgentRows[0]?.total || 0),
+        onlineRecently: rows.filter((row) => row.last_seen_at && Date.now() - new Date(row.last_seen_at).getTime() <= 15 * 60 * 1000).length,
+        openAlerts: Number(openAlertRows[0]?.total || 0),
+      },
+      records: rows.map((row) => ({
+        equipmentId: Number(row.equipment_id),
+        assetTag: row.asset_tag,
+        equipmentName: row.equipment_name,
+        computerName: row.computer_name,
+        branchName: row.branch_name,
+        status: row.status,
+        deviceHealth: row.device_health,
+        agent: row.agent_hostname
+          ? {
+              hostname: row.agent_hostname,
+              operatingSystem: row.operating_system,
+              version: row.agent_version,
+              lastSeenAt: row.last_seen_at,
+            }
+          : null,
+        latestMetric: row.metric_id
+          ? {
+              id: Number(row.metric_id),
+              cpuUsage: Number(row.cpu_usage || 0),
+              ramUsage: Number(row.ram_usage || 0),
+              diskUsage: Number(row.disk_usage || 0),
+              batteryHealth: row.battery_health === null ? null : Number(row.battery_health),
+              batteryLevel: row.battery_level === null ? null : Number(row.battery_level),
+              networkLatency: row.network_latency === null ? null : Number(row.network_latency),
+              packetLoss: row.packet_loss === null ? null : Number(row.packet_loss),
+              temperature: row.temperature === null ? null : Number(row.temperature),
+              uptimeSeconds: Number(row.uptime_seconds || 0),
+              recordedAt: row.recorded_at,
+            }
+          : null,
+        recommendation: row.recommendation
+          ? {
+              label: row.recommendation,
+              confidenceScore: row.confidence_score === null ? null : Number(row.confidence_score),
+              modelVersion: row.model_version,
+              generatedAt: row.generated_at,
+            }
+          : null,
+      })),
+    });
+  } catch (error) {
+    return res.status(500).json({ message: normalizeError(error) });
+  }
+});
+
+app.post("/api/device-monitoring/sample-device", async (req, res) => {
+  const actorUserId = Number(req.body?.actorUserId);
+  const requestedHostName = String(req.body?.computerName || "").trim();
+
+  if (!Number.isInteger(actorUserId) || actorUserId <= 0) {
+    return res.status(400).json({ message: "A valid actor user id is required." });
+  }
+
+  try {
+    const actor = await getUserContext(actorUserId);
+    if (!canAccessDeviceMonitoring(actor)) {
+      return res.status(403).json({ message: "You do not have access to create a sample monitored device." });
+    }
+
+    const branchId = Number(actor.branch_id || 0);
+    const countryId = Number(actor.country_id || 0);
+    if (!branchId || !countryId) {
+      return res.status(400).json({ message: "Your user profile must be assigned to a branch and country first." });
+    }
+
+    const [categoryRows] = await pool.query(
+      `
+        SELECT id
+        FROM categories
+        WHERE LOWER(name) IN ('laptop', 'desktop', 'computer')
+        ORDER BY FIELD(LOWER(name), 'laptop', 'desktop', 'computer')
+        LIMIT 1
+      `,
+    );
+
+    if (!categoryRows.length) {
+      return res.status(400).json({ message: "No laptop or desktop category exists yet in IMS." });
+    }
+
+    const suffix = Date.now().toString().slice(-6);
+    const assetTag = `MON-${suffix}`;
+    const serialNumber = `MON-SN-${suffix}`;
+    const computerName = requestedHostName || `Sample-${suffix}`;
+
+    const [insertResult] = await pool.query(
+      `
+        INSERT INTO equipment (
+          asset_tag,
+          serial_number,
+          computer_name,
+          equipment_name,
+          category_id,
+          country_id,
+          branch_id,
+          vendor_name,
+          model_name,
+          status,
+          purchase_year,
+          purchase_cost,
+          device_health,
+          asset_type,
+          base_configuration_name,
+          base_configuration_grade
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        assetTag,
+        serialNumber,
+        computerName,
+        "Monitoring Test Laptop",
+        Number(categoryRows[0].id),
+        countryId,
+        branchId,
+        "Airtel Lab",
+        "Telemetry Sample Build",
+        new Date().getFullYear(),
+        1250000,
+        "healthy",
+        "laptop",
+        "Monitoring Sandbox",
+        "Test",
+      ],
+    );
+
+    return res.status(201).json({
+      message: "Sample monitored device created.",
+      equipment: {
+        id: Number(insertResult.insertId),
+        assetTag,
+        computerName,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ message: normalizeError(error) });
+  }
+});
+
+app.get("/api/device-monitoring/config", async (req, res) => {
+  const userId = Number(req.query.userId);
+  const assetTag = String(req.query.assetTag || "").trim();
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: "A valid user id is required." });
+  }
+
+  if (!assetTag) {
+    return res.status(400).json({ message: "assetTag is required." });
+  }
+
+  try {
+    const actor = await getUserContext(userId);
+    if (!canAccessDeviceMonitoring(actor)) {
+      return res.status(403).json({ message: "You do not have access to device monitoring." });
+    }
+
+    const apiBase = process.env.APP_BASE_URL || getFrontendBaseUrl() || "http://localhost:5173";
+    const apiUrl = String(apiBase).replace(/\/$/, "").replace(/:\d+$/, ":4000");
+    const configJson = JSON.stringify(
+      {
+        apiUrl,
+        apiKey: deviceAgentApiKey,
+        assetTag,
+        interval: 300,
+      },
+      null,
+      2,
+    );
+
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="agent-config-${assetTag}.json"`);
+    return res.send(configJson);
+  } catch (error) {
+    return res.status(500).json({ message: normalizeError(error) });
+  }
+});
+
+app.get("/api/device-monitoring/download", async (req, res) => {
+  const userId = Number(req.query.userId);
+  const file = String(req.query.file || "").trim();
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: "A valid user id is required." });
+  }
+
+  try {
+    const actor = await getUserContext(userId);
+    if (!canAccessDeviceMonitoring(actor)) {
+      return res.status(403).json({ message: "You do not have access to device monitoring." });
+    }
+
+    const allowedFiles = new Map([
+      ["AirtelIMSDeviceAgent.exe", path.join(__dirname, "..", "device-agent", "dist", "AirtelIMSDeviceAgent.exe")],
+      ["agent.py", path.join(__dirname, "..", "device-agent", "agent.py")],
+      ["requirements.txt", path.join(__dirname, "..", "device-agent", "requirements.txt")],
+      ["install-agent.ps1", path.join(__dirname, "..", "device-agent", "install-agent.ps1")],
+      ["README.md", path.join(__dirname, "..", "device-agent", "README.md")],
+    ]);
+
+    const filePath = allowedFiles.get(file);
+    if (!filePath) {
+      return res.status(404).json({ message: "Requested file is not available." });
+    }
+
+    return res.download(filePath, file);
+  } catch (error) {
+    return res.status(500).json({ message: normalizeError(error) });
   }
 });
 
