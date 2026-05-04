@@ -5603,7 +5603,6 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       <div className="panel-header">
         <div>
           <h3>Notification Center</h3>
-          <p className="dashboard-subtitle">Recent workflow updates, asset changes, and operational messages appear here.</p>
         </div>
         <div className="filter-chip-row notification-filter-row">
           {([
@@ -5628,17 +5627,17 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
             <article className="notification-summary-card">
               <small>Unread now</small>
               <strong>{unreadNotificationCount}</strong>
-              <span>New workflow updates still waiting for review.</span>
+              {roleView === "it-manager" ? null : <span>New workflow updates still waiting for review.</span>}
             </article>
             <article className="notification-summary-card">
               <small>Today</small>
               <strong>{todayNotificationCount}</strong>
-              <span>Messages or events created today.</span>
+              {roleView === "it-manager" ? null : <span>Messages or events created today.</span>}
             </article>
             <article className="notification-summary-card notification-summary-card-alert">
               <small>Smart alerts</small>
               <strong>{smartAlerts.length}</strong>
-              <span>System-generated risk signals and stock warnings.</span>
+              {roleView === "it-manager" ? null : <span>System-generated risk signals and stock warnings.</span>}
             </article>
           </div>
           {smartAlerts.length > 0 ? (
@@ -5646,7 +5645,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
               {smartAlerts.slice(0, 4).map((alert, index) => (
                 <article className={`smart-alert-card is-${alert.severity}`} key={`${alert.title}-${index}`}>
                   <strong>{alert.title}</strong>
-                  <span>{alert.message}</span>
+                  {roleView === "it-manager" ? null : <span>{alert.message}</span>}
                 </article>
               ))}
             </div>

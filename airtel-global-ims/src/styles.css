@@ -2745,7 +2745,7 @@ select {
 }
 
 .chart-panel-grid {
-  display: grid;
+  display: none;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 1rem;
   margin-top: 1rem;
@@ -2819,6 +2819,11 @@ select {
   gap: 0.8rem;
 }
 
+.chart-bar-list {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  align-items: end;
+}
+
 .chart-bar-row {
   display: grid;
   gap: 0.35rem;
@@ -2836,14 +2841,13 @@ select {
 
 .chart-interactive-row.is-active,
 .chart-legend-button.is-active {
-  transform: translateX(3px);
+  transform: translateY(-3px);
 }
 
 .chart-bar-meta {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.75rem;
-  align-items: center;
+  display: grid;
+  gap: 0.2rem;
+  justify-items: center;
 }
 
 .chart-bar-meta strong,
@@ -2853,16 +2857,30 @@ select {
 
 .chart-bar-track {
   width: 100%;
-  height: 0.72rem;
-  border-radius: 999px;
+  max-width: 92px;
+  height: 180px;
+  display: flex;
+  align-items: end;
+  justify-content: center;
+  padding: 0.9rem 0.7rem 0;
+  border-radius: 1rem;
   overflow: hidden;
-  background: rgba(29, 111, 165, 0.12);
+  background: linear-gradient(180deg, rgba(217, 31, 38, 0.04), rgba(29, 111, 165, 0.08));
 }
 
 .chart-bar-fill {
-  height: 100%;
-  min-width: 0.35rem;
-  border-radius: inherit;
+  width: min(56px, 100%);
+  min-width: 1rem;
+  min-height: 0.6rem;
+  border-radius: 1rem 1rem 0.35rem 0.35rem;
+  box-shadow: 0 16px 24px rgba(17, 17, 17, 0.08);
+  transition: transform 180ms ease, box-shadow 180ms ease;
+}
+
+.chart-interactive-row:hover .chart-bar-fill,
+.chart-interactive-row:focus-visible .chart-bar-fill {
+  transform: translateY(-4px);
+  box-shadow: 0 20px 28px rgba(17, 17, 17, 0.14);
 }
 
 .bar-chart-grid {
@@ -2898,7 +2916,7 @@ select {
 
 .bar-chart-value {
   font-weight: 800;
-  font-size: 0.95rem;
+  font-size: 1rem;
 }
 
 .bar-chart-column-wrap {
@@ -2931,6 +2949,11 @@ select {
 .bar-chart-label {
   font-weight: 700;
   font-size: 0.92rem;
+}
+
+.bar-chart-subvalue {
+  color: var(--brand-muted);
+  font-size: 0.8rem;
 }
 
 .percentage-trend-chart-shell {
@@ -3109,6 +3132,11 @@ select {
   gap: 1.4rem;
 }
 
+.chart-pie-layout {
+  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
+  gap: 1.2rem;
+}
+
 .chart-donut-wrap {
   position: relative;
   width: 148px;
@@ -3122,6 +3150,16 @@ select {
   height: 240px;
 }
 
+.chart-pie-wrap {
+  width: 180px;
+  height: 180px;
+}
+
+.chart-donut-layout-hero .chart-pie-wrap {
+  width: 240px;
+  height: 240px;
+}
+
 .chart-donut-svg {
   width: 148px;
   height: 148px;
@@ -3131,6 +3169,63 @@ select {
 .chart-donut-svg-hero {
   width: 240px;
   height: 240px;
+}
+
+.chart-pie-svg {
+  width: 180px;
+  height: 180px;
+  transform: none;
+}
+
+.chart-donut-layout-hero .chart-pie-svg {
+  width: 240px;
+  height: 240px;
+}
+
+.chart-pie-slice {
+  cursor: pointer;
+  transition: transform 180ms ease, filter 180ms ease, opacity 180ms ease;
+  transform-origin: center;
+  filter: saturate(1.02);
+}
+
+.chart-pie-slice.is-active {
+  filter: brightness(1.04);
+  transform: scale(1.03);
+}
+
+.chart-pie-summary {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.chart-pie-highlight {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.9rem 1rem;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 241, 239, 0.94));
+  border: 1px solid rgba(217, 31, 38, 0.08);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+}
+
+.chart-pie-highlight span {
+  color: var(--brand-muted);
+  font-size: 0.86rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.chart-pie-highlight strong {
+  color: #111111;
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.chart-pie-highlight small {
+  color: #4b5563;
+  font-size: 0.92rem;
 }
 
 .chart-donut-ring,
@@ -4133,6 +4228,40 @@ select {
 
 .workflow-table-actions {
   align-content: start;
+}
+
+.workflow-table-actions .workflow-note-editor,
+.action-card .workflow-note-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.65rem;
+  margin-top: 0;
+}
+
+.workflow-table-actions .workflow-note-editor > .workflow-note-trigger,
+.action-card .workflow-note-editor > .workflow-note-trigger {
+  flex: 0 0 auto;
+}
+
+.workflow-table-actions .workflow-note-editor > .field,
+.workflow-table-actions .workflow-note-editor > textarea,
+.action-card .workflow-note-editor > .field,
+.action-card .workflow-note-editor > textarea {
+  flex: 1 1 100%;
+}
+
+.workflow-table-actions .card-action-row,
+.action-card .card-action-row {
+  flex-wrap: nowrap;
+  align-items: center;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.workflow-table-actions .card-action-row .compact-btn,
+.action-card .card-action-row .compact-btn {
+  flex: 0 0 auto;
 }
 
 .compact-btn {
@@ -5411,7 +5540,16 @@ select {
     justify-items: center;
   }
 
+  .chart-pie-layout {
+    grid-template-columns: 1fr;
+    justify-items: center;
+  }
+
   .chart-donut-layout-hero .chart-legend {
+    width: 100%;
+  }
+
+  .chart-pie-layout .chart-legend {
     width: 100%;
   }
 
