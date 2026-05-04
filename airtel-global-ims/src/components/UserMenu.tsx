@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, LogOut, UserRound } from "lucide-react";
+import { ChevronDown, Download, LogOut, UserRound } from "lucide-react";
 import type { LoggedInUser } from "../types";
 import UserAvatar from "./UserAvatar";
+
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+};
 
 type UserMenuProps = {
   user: LoggedInUser;
@@ -11,6 +16,11 @@ type UserMenuProps = {
 
 function UserMenu({ user, onOpenProfile, onLogout }: UserMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
+  const [isInstalling, setIsInstalling] = useState(false);
+  const [isInstalled, setIsInstalled] = useState(
+    window.matchMedia("(display-mode: standalone)").matches || Boolean((window.navigator as Navigator & { standalone?: boolean }).standalone),
+  );
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -35,6 +45,56 @@ function UserMenu({ user, onOpenProfile, onLogout }: UserMenuProps) {
     };
   }, []);
 
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPromptEvent(event as BeforeInstallPromptEvent);
+    };
+
+    const handleAppInstalled = () => {
+      setIsInstalled(true);
+      setInstallPromptEvent(null);
+    };
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    window.addEventListener("appinstalled", handleAppInstalled);
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+      window.removeEventListener("appinstalled", handleAppInstalled);
+    };
+  }, []);
+
+  const handleInstallApp = async () => {
+    if (isInstalled) {
+      return;
+    }
+
+    if (!installPromptEvent) {
+      const isAppleMobile = /iPad|iPhone|iPod/.test(window.navigator.userAgent);
+      const message = isAppleMobile
+        ? "To install this app on iPhone or iPad, open the browser Share menu and choose Add to Home Screen."
+        : "If the browser does not show the install prompt yet, open the browser menu and choose Install app or Add to Home Screen.";
+      window.alert(message);
+      setIsOpen(false);
+      return;
+    }
+
+    setIsInstalling(true);
+
+    try {
+      await installPromptEvent.prompt();
+      const choice = await installPromptEvent.userChoice;
+      if (choice.outcome === "accepted") {
+        setIsInstalled(true);
+      }
+      setInstallPromptEvent(null);
+      setIsOpen(false);
+    } finally {
+      setIsInstalling(false);
+    }
+  };
+
   return (
     <div className="user-menu" ref={menuRef}>
       <button
@@ -56,6 +116,16 @@ function UserMenu({ user, onOpenProfile, onLogout }: UserMenuProps) {
 
       {isOpen ? (
         <div className="user-menu-dropdown" role="menu">
+          <button
+            className={`user-menu-item ${isInstalled ? "is-disabled" : ""}`}
+            type="button"
+            role="menuitem"
+            onClick={() => void handleInstallApp()}
+            disabled={isInstalling || isInstalled}
+          >
+            <Download size={16} strokeWidth={2.2} />
+            <span>{isInstalled ? "App installed" : isInstalling ? "Installing..." : "Install app"}</span>
+          </button>
           {onOpenProfile ? (
             <button
               className="user-menu-item"

@@ -16,6 +16,7 @@ import type { LoggedInUser } from "./types";
 const INACTIVITY_LIMIT_MS = 5 * 60 * 1000;
 const WARNING_WINDOW_MS = 60 * 1000;
 const SESSION_ACTIVITY_KEY = "airtel-ims-last-activity";
+const OTP_TRUST_KEY = "airtel-ims-otp-trust";
 
 function navigateTo(path: string, replace = false) {
   const method = replace ? "replaceState" : "pushState";
@@ -55,17 +56,20 @@ function isHrRole(role: string | null | undefined) {
 
 function isItDirectorRole(role: string | null | undefined) {
   const normalizedRole = normalizeRoleName(role);
-  return normalizedRole === "it director" || normalizedRole === "it infrastructure manager" || normalizedRole === "itd";
+  return normalizedRole === "it director" || normalizedRole === "itd";
+}
+
+function isItInfrastructureManagerRole(role: string | null | undefined) {
+  return normalizeRoleName(role) === "it infrastructure manager";
+}
+
+function isItSecurityManagerRole(role: string | null | undefined) {
+  return normalizeRoleName(role) === "it security manager";
 }
 
 function isItSupportRole(role: string | null | undefined) {
   const normalizedRole = normalizeRoleName(role);
-  return (
-    normalizedRole === "it support engineer" ||
-    normalizedRole === "it officer" ||
-    normalizedRole === "it security manager" ||
-    normalizedRole.includes("it support")
-  );
+  return normalizedRole === "it support engineer" || normalizedRole === "it officer" || normalizedRole.includes("it support");
 }
 
 function isWarehouseRole(role: string | null | undefined) {
@@ -91,6 +95,14 @@ function getPathForRole(role: string) {
     return "/it-director";
   }
 
+  if (isItInfrastructureManagerRole(role)) {
+    return "/it-infra";
+  }
+
+  if (isItSecurityManagerRole(role)) {
+    return "/it-security";
+  }
+
   if (isItSupportRole(role)) {
     return "/it-support";
   }
@@ -100,10 +112,6 @@ function getPathForRole(role: string) {
   }
 
   const normalizedRole = normalizeRoleName(role);
-  if (normalizedRole === "it security manager") {
-    return "/it-security";
-  }
-
   if (normalizedRole === "hr recruitment officer") {
     return "/hrms";
   }
@@ -114,10 +122,6 @@ function getPathForRole(role: string) {
 
   if (normalizedRole === "it officer") {
     return "/it-officer";
-  }
-
-  if (normalizedRole === "it infrastructure manager") {
-    return "/it-infra";
   }
 
   if (normalizedRole === "employee") {
@@ -193,6 +197,7 @@ function App() {
     setUser(null);
     window.sessionStorage.removeItem(SESSION_KEY);
     window.sessionStorage.removeItem(SESSION_ACTIVITY_KEY);
+    window.localStorage.removeItem(OTP_TRUST_KEY);
     setIsSessionWarningVisible(false);
     navigateTo("/", true);
   };
@@ -326,6 +331,7 @@ function App() {
         setUser(null);
         window.sessionStorage.removeItem(SESSION_KEY);
         window.sessionStorage.removeItem(SESSION_ACTIVITY_KEY);
+        window.localStorage.removeItem(OTP_TRUST_KEY);
         setIsSessionWarningVisible(false);
         navigateTo("/", true);
       }, timeRemaining);
@@ -381,6 +387,10 @@ function App() {
   } else if (isHrRole(user.role)) {
     dashboardView = <HrDashboardPage user={user} onLogout={handleLogout} onUserUpdate={handleUserUpdate} />;
   } else if (isItDirectorRole(user.role)) {
+    dashboardView = <ItManagerDashboardPage user={user} onLogout={handleLogout} onUserUpdate={handleUserUpdate} />;
+  } else if (isItInfrastructureManagerRole(user.role)) {
+    dashboardView = <ItManagerDashboardPage user={user} onLogout={handleLogout} onUserUpdate={handleUserUpdate} />;
+  } else if (isItSecurityManagerRole(user.role)) {
     dashboardView = <ItManagerDashboardPage user={user} onLogout={handleLogout} onUserUpdate={handleUserUpdate} />;
   } else if (isItSupportRole(user.role)) {
     dashboardView = <ItSupportDashboardPage user={user} onLogout={handleLogout} onUserUpdate={handleUserUpdate} />;

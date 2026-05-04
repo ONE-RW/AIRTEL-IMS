@@ -8,7 +8,21 @@ type ItManagerDashboardPageProps = {
 };
 
 function ItManagerDashboardPage({ user, onLogout, onUserUpdate }: ItManagerDashboardPageProps) {
-  return <WorkflowRoleDashboard user={user} onLogout={onLogout} onUserUpdate={onUserUpdate} roleView="it-manager" />;
+  const normalizedRole = user.role.trim().toLowerCase();
+  const roleView = normalizedRole === "it security manager"
+    ? "it-security"
+    : normalizedRole === "it infrastructure manager"
+      ? "it-infrastructure"
+      : "it-manager";
+
+  return (
+    <WorkflowRoleDashboard
+      user={user}
+      onLogout={onLogout}
+      onUserUpdate={onUserUpdate}
+      roleView={roleView}
+    />
+  );
 }
 
 export default ItManagerDashboardPage;

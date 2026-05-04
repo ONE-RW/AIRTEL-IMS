@@ -44,8 +44,8 @@ import { fetchJson, getApiMessage, parseApiResponse } from "../api";
 import { API_BASE_URL } from "../config";
 import type { LoggedInUser } from "../types";
 
-type RoleView = "branch-manager" | "hr" | "it-manager" | "it-support" | "warehouse" | "employee";
-type StockControlView = "available" | "returned" | "retired";
+type RoleView = "branch-manager" | "hr" | "it-manager" | "it-infrastructure" | "it-security" | "it-support" | "warehouse" | "employee";
+type StockControlView = "all" | "available" | "returned" | "assigned" | "retired";
 
 type ExportFormat = "html" | "excel" | "pdf";
 
@@ -233,6 +233,8 @@ type ReturnRow = {
   return_attachment_name?: string | null;
   return_attachment_type?: string | null;
   return_status: "it_review" | "store_intake" | "awaiting_final_approval" | "returned_to_employee" | "requested" | "completed" | "rejected" | "maintenance";
+  hr_notified_it_at?: string | null;
+  hr_notified_it_by?: number | null;
   final_hrd_approval_status?: "pending" | "approved" | "rejected";
   final_hrd_approved_at?: string | null;
   final_itd_approval_status?: "pending" | "approved" | "rejected";
@@ -385,6 +387,29 @@ type EmployeeRow = {
   country_name: string | null;
   department_name: string | null;
 };
+
+const matchesHrEmployeeRequestSearch = (employee: EmployeeRow, normalizedSearch: string) => {
+  if (!normalizedSearch) {
+    return false;
+  }
+
+  const hrmsId = String(employee.hrms_employee_id || "").toLowerCase();
+  const employeeCode = String(employee.employee_code || "").toLowerCase();
+  const fullName = String(employee.full_name || "").toLowerCase();
+  const firstName = String(employee.first_name || "").toLowerCase();
+  const lastName = String(employee.last_name || "").toLowerCase();
+
+  return (
+    hrmsId.includes(normalizedSearch) ||
+    employeeCode.includes(normalizedSearch) ||
+    fullName.includes(normalizedSearch) ||
+    firstName.includes(normalizedSearch) ||
+    lastName.includes(normalizedSearch)
+  );
+};
+
+const getHrEmployeeRequestOptionLabel = (employee: EmployeeRow) =>
+  `${employee.full_name} / ${employee.hrms_employee_id || employee.employee_code || "NO-ID"}`;
 
 type MaintenanceRecord = {
   id: number;
@@ -648,8 +673,9 @@ type ReplacementDisposition = "available" | "retired";
 
 const openFulfillmentStatuses = new Set(["waiting_stock", "backordered", "on_hold"]);
 const storageDeviceCategoryNames = new Set(["laptop", "desktop", "smartphone", "phone", "mobile phone", "tablet"]);
-const DEFAULT_ITEMS_PER_PAGE = 3;
-const PAGE_SIZE_OPTIONS = [3, 6, 9];
+const defaultWarehouseCategoryNames = new Set(["desktop", "laptop", "smartphone"]);
+const DEFAULT_ITEMS_PER_PAGE = 10;
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const equipmentAccessoryMap: Record<string, AccessoryBundleProfile> = {
   desktop: {
     required: ["CPU / system unit", "Screen / monitor", "Keyboard", "Mouse"],
@@ -780,6 +806,55 @@ const roleConfigs: Record<
       },
     ],
   },
+  "it-infrastructure": {
+    title: "IT Infrastructure Manager Dashboard",
+    chipLabel: "IT Infrastructure Manager",
+    subtitle: "Approve technical requests, monitor return-device alerts, and keep infrastructure workflow healthy.",
+    sidebarGroups: [
+      {
+        title: "IT Infrastructure Workspace",
+        icon: Wrench,
+        links: [
+          { label: "Overview", href: "#overview", icon: ClipboardCheck },
+        ],
+      },
+      {
+        title: "Settings",
+        icon: UserCog,
+        links: [
+          { label: "Settings", href: "#settings", icon: UserCog },
+        ],
+      },
+    ],
+  },
+  "it-security": {
+    title: "IT Security Manager Dashboard",
+    chipLabel: "IT Security Manager",
+    subtitle: "Review security-related requests, monitor technical controls, and keep asset oversight aligned.",
+    sidebarGroups: [
+      {
+        title: "IT Security Workspace",
+        icon: ShieldCheck,
+        links: [
+          { label: "Overview", href: "#overview", icon: ClipboardCheck },
+          { label: "Approvals", href: "#approvals", icon: ShieldCheck },
+          { label: "Timeline", href: "#timeline", icon: FileChartColumn },
+        ],
+      },
+      {
+        title: "IT Security Reports",
+        icon: FileChartColumn,
+        links: [{ label: "Reports", href: "#reports", icon: FileChartColumn }],
+      },
+      {
+        title: "Settings",
+        icon: UserCog,
+        links: [
+          { label: "Settings", href: "#settings", icon: UserCog },
+        ],
+      },
+    ],
+  },
   "it-support": {
     title: "IT Support Engineer Dashboard",
     chipLabel: "IT Support Engineer",
@@ -871,6 +946,13 @@ const roleConfigs: Record<
 function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: WorkflowRoleDashboardProps) {
   const todayDateValue = new Date().toISOString().slice(0, 10);
   const config = roleConfigs[roleView];
+  const isItLeadershipView = roleView === "it-manager" || roleView === "it-infrastructure" || roleView === "it-security";
+  const itLeadershipLabel =
+    roleView === "it-security"
+      ? "IT Security Manager"
+      : roleView === "it-infrastructure"
+        ? "IT Infrastructure Manager"
+        : "IT Director";
   const dashboardBasePath = useMemo(() => getDashboardBasePath(window.location.pathname), []);
   const validSections = useMemo(() => {
     const sections = new Set(INTERNAL_SECTION_FALLBACKS);
@@ -976,6 +1058,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
   const [requestPageByKey, setRequestPageByKey] = useState<Record<string, number>>({});
   const [returnPageByKey, setReturnPageByKey] = useState<Record<string, number>>({});
   const [pageSizeByKey, setPageSizeByKey] = useState<Record<string, number>>({});
+  const [expandedNoteEditors, setExpandedNoteEditors] = useState<Record<string, boolean>>({});
   const [assignmentMlPredictions, setAssignmentMlPredictions] = useState<
     Record<number, { probability: number; recommendation: string; modelVersion: string } | null | undefined>
   >({});
@@ -1113,25 +1196,21 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
   const issues = dashboardData?.issues ?? [];
   const maintenanceRecords = dashboardData?.maintenanceRecords ?? [];
   const lifecycleEvents = dashboardData?.lifecycleEvents ?? [];
-  const smartAlerts = dashboardData?.smartAlerts ?? [];
+  const allSmartAlerts = dashboardData?.smartAlerts ?? [];
   const replacementInsights = dashboardData?.replacementInsights ?? [];
-  const notifications = dashboardData?.notifications ?? [];
+  const allNotifications = dashboardData?.notifications ?? [];
+  const isReturnAlertContent = (value: string) => /return|returned device|returned asset|device return|final return/i.test(value);
+  const smartAlerts =
+    roleView === "it-manager" || roleView === "it-infrastructure"
+      ? allSmartAlerts.filter((item) => isReturnAlertContent(`${item.title} ${item.message}`))
+      : allSmartAlerts;
+  const notifications =
+    roleView === "it-manager" || roleView === "it-infrastructure"
+      ? allNotifications.filter((item) => isReturnAlertContent(`${item.title} ${item.message || ""}`))
+      : allNotifications;
   const normalizedHrEmployeeIdSearch = hrEmployeeIdSearch.trim().toLowerCase();
   const filteredHrEmployeesForRequest = normalizedHrEmployeeIdSearch
-    ? employees.filter((employee) => {
-        const hrmsId = String(employee.hrms_employee_id || "").toLowerCase();
-        const employeeCode = String(employee.employee_code || "").toLowerCase();
-        const fullName = String(employee.full_name || "").toLowerCase();
-        const firstName = String(employee.first_name || "").toLowerCase();
-        const lastName = String(employee.last_name || "").toLowerCase();
-        return (
-          hrmsId.includes(normalizedHrEmployeeIdSearch) ||
-          employeeCode.includes(normalizedHrEmployeeIdSearch) ||
-          fullName.includes(normalizedHrEmployeeIdSearch) ||
-          firstName.includes(normalizedHrEmployeeIdSearch) ||
-          lastName.includes(normalizedHrEmployeeIdSearch)
-        );
-      })
+    ? employees.filter((employee) => matchesHrEmployeeRequestSearch(employee, normalizedHrEmployeeIdSearch))
     : [];
   const [dismissedNotificationIds, setDismissedNotificationIds] = useState<number[]>([]);
   const unreadNotificationCount = notifications.filter((item) => item.status === "unread" && !dismissedNotificationIds.includes(item.id)).length;
@@ -1151,6 +1230,18 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
     maintenanceRecords.length > 0 ||
     notifications.length > 0;
   const selectedStockCategory = categories.find((category) => String(category.id) === stockForm.categoryId);
+  const availableWarehouseCategoryIds = new Set(
+    equipment
+      .filter((item) => item.stock_location === "warehouse_stock" && item.status === "available")
+      .map((item) => String(item.category_id)),
+  );
+  const hrRequestCategories = categories.filter(
+    (category) => availableWarehouseCategoryIds.has(String(category.id)) || String(category.id) === requestForm.categoryId,
+  );
+  const warehouseRegistrationCategories = categories.filter((category) => {
+    const normalizedName = category.name.trim().toLowerCase();
+    return defaultWarehouseCategoryNames.has(normalizedName) || String(category.id) === stockForm.categoryId;
+  });
   const resolvedEquipmentName = selectedStockCategory?.name || stockForm.equipmentName.trim();
   const isStorageDeviceStockForm = selectedStockCategory
     ? storageDeviceCategoryNames.has(selectedStockCategory.name.toLowerCase())
@@ -1618,19 +1709,19 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
   };
 
   const renderWorkflowProgress = (
-    steps: Array<{ id: string | number; label: string; status: string; note?: string | null }>,
+    steps: Array<{ id: string | number; label: string; status: string; statusLabel?: string; tone?: string; note?: string | null }>,
     caption?: string,
   ) => (
     <div className="workflow-progress-shell">
       <div className="workflow-progress-strip">
         {steps.map((step) => {
-          const tone = getWorkflowStepTone(step.status);
+          const tone = step.tone || getWorkflowStepTone(step.status);
 
           return (
             <article className={`workflow-progress-node is-${tone}`} key={step.id}>
               <span className="workflow-progress-dot" aria-hidden="true" />
               <strong>{normalizeWorkflowLabel(step.label)}</strong>
-              <span>{formatLabelText(step.status)}</span>
+              <span>{step.statusLabel || formatLabelText(step.status)}</span>
               {step.note ? <small>{step.note}</small> : null}
             </article>
           );
@@ -1643,6 +1734,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
   const renderRequestWorkflowProgress = (request: RequestRow) => {
     const nextPendingStep = request.workflowSteps.find((step) => step.action_status === "pending");
     const fulfillmentStatus = request.fulfillment_status as RequestRow["fulfillment_status"];
+    const currentPendingStepId = nextPendingStep?.id ?? null;
     let caption = "Workflow is moving through approvals and fulfillment.";
 
     if (request.request_status === "fulfilled") {
@@ -1662,6 +1754,13 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
         id: step.id,
         label: step.step_label,
         status: step.action_status,
+        tone: (() => {
+          if (step.action_status === "pending") {
+            return currentPendingStepId !== null && step.id === currentPendingStepId ? "current" : "idle";
+          }
+
+          return undefined;
+        })(),
         note: step.actor_name || step.action_note || "",
       })),
       caption,
@@ -2047,11 +2146,21 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
     return pendingStep?.actor_role === user.role;
   });
 
-  const itApprovals = requests.filter(
-    (request) =>
-      ["it_inventory_review", "itd_approval", "it_preparation", "security_review"].includes(request.currentStageKey) &&
-      request.request_status === "pending",
-  );
+  const itApprovals = requests.filter((request) => {
+    if (request.request_status !== "pending") {
+      return false;
+    }
+
+    if (roleView === "it-security") {
+      return request.currentStageKey === "security_review";
+    }
+
+    if (roleView === "it-manager") {
+      return ["itd_approval", "it_preparation"].includes(request.currentStageKey);
+    }
+
+    return ["it_inventory_review", "itd_approval", "it_preparation", "security_review"].includes(request.currentStageKey);
+  });
 
   const fulfillmentRequests = requests.filter(
     (request) =>
@@ -2065,8 +2174,8 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       return false;
     }
 
-    if (roleView === "it-manager") {
-      return user.role === "IT Director" && item.final_itd_approval_status !== "approved";
+    if (isItLeadershipView) {
+      return item.final_itd_approval_status !== "approved";
     }
 
     return false;
@@ -2404,6 +2513,10 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
 
   const formatReturnReason = (reason?: ReturnRow["return_reason"]) =>
     reason === "leaving_job" ? "Employee leaving job" : "Standard return";
+  const isHrNotificationPending = (item: ReturnRow) =>
+    item.return_reason === "leaving_job" && !item.hr_notified_it_at;
+  const formatHrNotificationStatus = (item: ReturnRow) =>
+    isHrNotificationPending(item) ? "Pending HR notification" : item.return_reason === "leaving_job" ? "HR notified IT" : "Not required";
 
   const patchRequestInDashboard = (updatedRequest: RequestRow) => {
     setDashboardData((current) => {
@@ -3554,12 +3667,12 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
         branchId: user.branchId,
         vendorName: stockForm.vendorName,
         modelName: stockForm.modelName,
-        status: stockForm.status,
+        status: editingEquipmentId ? stockForm.status : "available",
         purchaseYear: Number(stockForm.purchaseYear || 0) || null,
         purchaseCost: Number(stockForm.purchaseCost || 0),
         purchaseDate: stockForm.purchaseDate || null,
         locationDetails: stockForm.locationDetails || null,
-        deviceHealth: stockForm.deviceHealth || null,
+        deviceHealth: editingEquipmentId ? stockForm.deviceHealth || null : "Healthy",
         warrantyEndDate: stockForm.warrantyEndDate || null,
         lifespanYears: Number(stockForm.lifespanYears || 4),
         stockLocation: roleView === "warehouse" ? "warehouse_stock" : "it_stock",
@@ -3967,6 +4080,26 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       },
     }));
   };
+
+  const handleHrNotifyIt = async (returnId: number) => {
+    await submitAction(
+      "POST",
+      `/returns/${returnId}/hr-notify-it`,
+      {
+        actorUserId: user.id,
+      },
+      "IT Support notified by HR.",
+    );
+  };
+
+  const toggleNoteEditor = (editorKey: string) => {
+    setExpandedNoteEditors((current) => ({
+      ...current,
+      [editorKey]: !current[editorKey],
+    }));
+  };
+
+  const isNoteEditorOpen = (editorKey: string) => Boolean(expandedNoteEditors[editorKey]);
 
   const handleCompleteMaintenance = async (maintenanceId: number) => {
     const form = maintenanceCloseForm[maintenanceId] ?? {
@@ -4435,11 +4568,11 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
           workflow_summary: getWorkflowSummary(request),
           created_at: request.created_at,
         })),
-        ...(roleView === "it-manager" || roleView === "it-support"
+        ...(isItLeadershipView || roleView === "it-support"
           ? filteredReportEquipment
               .filter((item) => item.status === "available")
               .concat(
-                roleView === "it-manager"
+                isItLeadershipView
                   ? [
                       ...filteredReportEquipment.filter((item) => item.status === "maintenance"),
                       ...filteredReportEquipment.filter((item) => item.status === "assigned"),
@@ -4605,7 +4738,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
         kind: "request" as const,
         status: item.label,
       })),
-      ...(roleView === "it-manager"
+      ...(isItLeadershipView
         ? equipmentReportCounts.map((item) => ({
             key: `equipment-${item.label}`,
             label: `${item.label} equipment`,
@@ -4782,6 +4915,15 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
 
                       return (
                         <>
+                    <div className="card-action-row">
+                      <button
+                        className="secondary-btn compact-btn workflow-note-trigger"
+                        type="button"
+                        onClick={() => setSelectedTimelineWorkflowRequestId(request.id)}
+                      >
+                        Approval workflow
+                      </button>
+                    </div>
                     {showInventoryReservation ? (
                       <>
                       <select
@@ -4819,17 +4961,29 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                         ) : null}
                       </>
                     ) : null}
-                    <textarea
-                      value={approvalNotes[request.id] || ""}
-                      onChange={(event) =>
-                        setApprovalNotes((current) => ({
-                          ...current,
-                          [request.id]: event.target.value,
-                        }))
-                      }
-                      placeholder="Approval note, or required reason if returning/rejecting"
-                      disabled={isSubmitting}
-                    />
+                    <div className="card-form-stack workflow-note-editor">
+                      <button
+                        className="secondary-btn compact-btn workflow-note-trigger"
+                        type="button"
+                        onClick={() => toggleNoteEditor(`workflow-approval-note-${request.id}`)}
+                        disabled={isSubmitting}
+                      >
+                        {isNoteEditorOpen(`workflow-approval-note-${request.id}`) ? "Hide comment" : "Add comment"}
+                      </button>
+                      {isNoteEditorOpen(`workflow-approval-note-${request.id}`) ? (
+                        <textarea
+                          value={approvalNotes[request.id] || ""}
+                          onChange={(event) =>
+                            setApprovalNotes((current) => ({
+                              ...current,
+                              [request.id]: event.target.value,
+                            }))
+                          }
+                          placeholder="Approval note, or required reason if returning/rejecting"
+                          disabled={isSubmitting}
+                        />
+                      ) : null}
+                    </div>
                     <div className="card-action-row">
                       <button
                         className="primary-btn compact-btn btn-success"
@@ -4961,23 +5115,34 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                       <option value="on_hold">On hold</option>
                       <option value="ready">Ready to fulfill</option>
                     </select>
-                    <textarea
-                      value={fulfillmentForm[request.id]?.note || ""}
-                      onChange={(event) =>
-                        setFulfillmentForm((current) => ({
-                          ...current,
-                          [request.id]: {
-                            equipmentId: current[request.id]?.equipmentId || "",
-                            expectedReturnDate: current[request.id]?.expectedReturnDate || "",
-                            note: event.target.value,
-                            fulfillmentStatus: current[request.id]?.fulfillmentStatus || "waiting_stock",
-                            replacementDisposition: current[request.id]?.replacementDisposition || "available",
-                            replacementConditionStatus: current[request.id]?.replacementConditionStatus || "",
-                          },
-                        }))
-                      }
-                      placeholder="Fulfillment note, waiting reason, or stock update"
-                    />
+                    <div className="card-form-stack workflow-note-editor">
+                      <button
+                        className="secondary-btn compact-btn workflow-note-trigger"
+                        type="button"
+                        onClick={() => toggleNoteEditor(`workflow-fulfillment-note-${request.id}`)}
+                      >
+                        {isNoteEditorOpen(`workflow-fulfillment-note-${request.id}`) ? "Hide comment" : "Add comment"}
+                      </button>
+                      {isNoteEditorOpen(`workflow-fulfillment-note-${request.id}`) ? (
+                        <textarea
+                          value={fulfillmentForm[request.id]?.note || ""}
+                          onChange={(event) =>
+                            setFulfillmentForm((current) => ({
+                              ...current,
+                              [request.id]: {
+                                equipmentId: current[request.id]?.equipmentId || "",
+                                expectedReturnDate: current[request.id]?.expectedReturnDate || "",
+                                note: event.target.value,
+                                fulfillmentStatus: current[request.id]?.fulfillmentStatus || "waiting_stock",
+                                replacementDisposition: current[request.id]?.replacementDisposition || "available",
+                                replacementConditionStatus: current[request.id]?.replacementConditionStatus || "",
+                              },
+                            }))
+                          }
+                          placeholder="Fulfillment note, waiting reason, or stock update"
+                        />
+                      ) : null}
+                    </div>
                     {request.request_type === "replacement" && request.source_equipment_id ? (
                       (() => {
                         const sourceEquipment = equipmentById.get(request.source_equipment_id);
@@ -5181,17 +5346,29 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                     ) : null}
                   </div>
                   <div className="workflow-table-stack">
-                    <textarea
-                      value={approvalNotes[request.id] || ""}
-                      onChange={(event) =>
-                        setApprovalNotes((current) => ({
-                          ...current,
-                          [request.id]: event.target.value,
-                        }))
-                      }
-                      placeholder="Approval note, or required reason if returning/rejecting"
-                      disabled={isSubmitting}
-                    />
+                    <div className="card-form-stack workflow-note-editor">
+                      <button
+                        className="secondary-btn compact-btn workflow-note-trigger"
+                        type="button"
+                        onClick={() => toggleNoteEditor(`it-support-approval-note-${request.id}`)}
+                        disabled={isSubmitting}
+                      >
+                        {isNoteEditorOpen(`it-support-approval-note-${request.id}`) ? "Hide comment" : "Add comment"}
+                      </button>
+                      {isNoteEditorOpen(`it-support-approval-note-${request.id}`) ? (
+                        <textarea
+                          value={approvalNotes[request.id] || ""}
+                          onChange={(event) =>
+                            setApprovalNotes((current) => ({
+                              ...current,
+                              [request.id]: event.target.value,
+                            }))
+                          }
+                          placeholder="Approval note, or required reason if returning/rejecting"
+                          disabled={isSubmitting}
+                        />
+                      ) : null}
+                    </div>
                     {request.notes ? <span>{request.notes}</span> : <span>No request note provided.</span>}
                     {request.clarification_status === "needed" && request.clarification_note ? (
                       <span className="warning-text">Clarification needed: {request.clarification_note}</span>
@@ -5334,17 +5511,28 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                   <strong>{order.reviewed_note || order.note || "No note"}</strong>
                   {context === "warehouse" && order.status === "pending" ? (
                     <>
-                      <textarea
-                        className="warehouse-note-field"
-                        value={warehouseDecisionNotes[order.id] || ""}
-                        onChange={(event) =>
-                          setWarehouseDecisionNotes((current) => ({
-                            ...current,
-                            [order.id]: event.target.value,
-                          }))
-                        }
-                        placeholder="Optional approval or rejection note"
-                      />
+                      <div className="card-form-stack workflow-note-editor">
+                        <button
+                          className="secondary-btn compact-btn workflow-note-trigger"
+                          type="button"
+                          onClick={() => toggleNoteEditor(`warehouse-decision-note-${order.id}`)}
+                        >
+                          {isNoteEditorOpen(`warehouse-decision-note-${order.id}`) ? "Hide comment" : "Add comment"}
+                        </button>
+                        {isNoteEditorOpen(`warehouse-decision-note-${order.id}`) ? (
+                          <textarea
+                            className="warehouse-note-field"
+                            value={warehouseDecisionNotes[order.id] || ""}
+                            onChange={(event) =>
+                              setWarehouseDecisionNotes((current) => ({
+                                ...current,
+                                [order.id]: event.target.value,
+                              }))
+                            }
+                            placeholder="Optional approval or rejection note"
+                          />
+                        ) : null}
+                      </div>
                       <div className="card-action-row">
                         <button className="primary-btn compact-btn" type="button" onClick={() => void handleWarehouseDecision(order.id, "approved")}>
                           Approve
@@ -5434,33 +5622,37 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
           ))}
         </div>
       </div>
-      <div className="notification-summary-grid">
-        <article className="notification-summary-card">
-          <small>Unread now</small>
-          <strong>{unreadNotificationCount}</strong>
-          <span>New workflow updates still waiting for review.</span>
-        </article>
-        <article className="notification-summary-card">
-          <small>Today</small>
-          <strong>{todayNotificationCount}</strong>
-          <span>Messages or events created today.</span>
-        </article>
-        <article className="notification-summary-card notification-summary-card-alert">
-          <small>Smart alerts</small>
-          <strong>{smartAlerts.length}</strong>
-          <span>System-generated risk signals and stock warnings.</span>
-        </article>
-      </div>
-      {smartAlerts.length > 0 ? (
-        <div className="smart-alert-grid">
-          {smartAlerts.slice(0, 4).map((alert, index) => (
-            <article className={`smart-alert-card is-${alert.severity}`} key={`${alert.title}-${index}`}>
-              <strong>{alert.title}</strong>
-              <span>{alert.message}</span>
+      {roleView === "it-security" ? null : (
+        <>
+          <div className="notification-summary-grid">
+            <article className="notification-summary-card">
+              <small>Unread now</small>
+              <strong>{unreadNotificationCount}</strong>
+              <span>New workflow updates still waiting for review.</span>
             </article>
-          ))}
-        </div>
-      ) : null}
+            <article className="notification-summary-card">
+              <small>Today</small>
+              <strong>{todayNotificationCount}</strong>
+              <span>Messages or events created today.</span>
+            </article>
+            <article className="notification-summary-card notification-summary-card-alert">
+              <small>Smart alerts</small>
+              <strong>{smartAlerts.length}</strong>
+              <span>System-generated risk signals and stock warnings.</span>
+            </article>
+          </div>
+          {smartAlerts.length > 0 ? (
+            <div className="smart-alert-grid">
+              {smartAlerts.slice(0, 4).map((alert, index) => (
+                <article className={`smart-alert-card is-${alert.severity}`} key={`${alert.title}-${index}`}>
+                  <strong>{alert.title}</strong>
+                  <span>{alert.message}</span>
+                </article>
+              ))}
+            </div>
+          ) : null}
+        </>
+      )}
       <div className="notification-list">
         {visibleNotifications.length > 0 ? (
           visibleNotifications.map((item) => (
@@ -5724,6 +5916,69 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       );
     }
 
+    if (roleView === "it-security") {
+      return (
+        <>
+          <section className="dashboard-card-grid">
+            <OverviewShortcutCard
+              title="Approval Queue"
+              value={itApprovals.length}
+              actionLabel="Review approvals"
+              onClick={() => setActiveSection("approvals")}
+            />
+          </section>
+        </>
+      );
+    }
+
+    if (roleView === "it-infrastructure") {
+      return (
+        <>
+          <section className="dashboard-card-grid">
+            <OverviewShortcutCard
+              title="Return Device Alerts"
+              value={notifications.length}
+              insight={`${unreadNotificationCount} unread return alert${unreadNotificationCount === 1 ? "" : "s"}`}
+              actionLabel="Use the bell icon"
+            />
+          </section>
+          <section className="dashboard-panel">
+            <div className="panel-header">
+              <h3>Return Alert Center</h3>
+              <span>{notifications.length} alert{notifications.length === 1 ? "" : "s"}</span>
+            </div>
+            {visibleNotifications.length > 0 ? (
+              <div className="notification-list">
+                {visibleNotifications.map((item) => (
+                  <article className="notification-list-card" key={item.id}>
+                    <div className="notification-list-icon" aria-hidden="true">
+                      <Bell size={18} strokeWidth={2.4} />
+                    </div>
+                    <div>
+                      <div className="notification-list-head">
+                        <strong>{item.title}</strong>
+                        <time dateTime={item.created_at}>{formatProfileDate(item.created_at)}</time>
+                      </div>
+                      <p>{item.message || "No message was attached to this return alert."}</p>
+                      <span className={`status-pill status-${item.status === "unread" ? "pending" : "fulfilled"}`}>
+                        {item.status === "unread" ? "New return alert" : item.status}
+                      </span>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="notification-empty-state">
+                <Bell size={24} strokeWidth={2.2} />
+                <strong>No return device alerts</strong>
+                <p>Returned device alerts will appear here and in the top-right notification bell.</p>
+              </div>
+            )}
+          </section>
+        </>
+      );
+    }
+
     if (roleView === "it-manager") {
       const issueChartKey = "it-manager-issues";
       const equipmentChartKey = "it-manager-equipment";
@@ -5743,6 +5998,12 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       return (
         <>
         <section className="dashboard-card-grid">
+            <OverviewShortcutCard
+              title="Approval Queue"
+              value={itApprovals.length}
+              actionLabel="Review approvals"
+              onClick={() => setActiveSection("approvals")}
+            />
             <OverviewShortcutCard
               title="Open Issues"
               value={issues.filter((issue) => issue.issue_status !== "closed").length}
@@ -5766,6 +6027,13 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
               value={availableEquipment.length}
               actionLabel="View inventory"
               onClick={() => setActiveSection("equipment")}
+            />
+            <OverviewShortcutCard
+              title="Security Alerts"
+              value={smartAlerts.length || unreadNotificationCount}
+              insight={`${unreadNotificationCount} unread notification${unreadNotificationCount === 1 ? "" : "s"}`}
+              actionLabel="Open alerts"
+              onClick={() => setActiveSection("notifications")}
             />
           </section>
           <section className="chart-panel-grid">
@@ -6296,7 +6564,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
             </div>
             {isStockFormOpen ? (
               <div className="hr-modal-overlay" role="dialog" aria-modal="true" onClick={resetStockForm}>
-                <div className="hr-modal-card" onClick={(event) => event.stopPropagation()}>
+                <div className="hr-modal-card warehouse-stock-modal-card" onClick={(event) => event.stopPropagation()}>
                   <div className="panel-header" style={{ marginBottom: "1rem" }}>
                     <div>
                       <h3>{editingEquipmentId ? "Edit warehouse asset" : "Register warehouse asset"}</h3>
@@ -6327,7 +6595,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                       />
                     </label>
                     <label className="field">
-                      <span>Computer name / Hostname</span>
+                      <span>Device name</span>
                       <input
                         value={stockForm.computerName}
                         onChange={(event) => setStockForm((current) => ({ ...current, computerName: event.target.value }))}
@@ -6364,14 +6632,13 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                         required
                       >
                         <option value="">Select category</option>
-                        {categories.map((category) => (
+                        {warehouseRegistrationCategories.map((category) => (
                           <option key={category.id} value={category.id}>{category.name}</option>
                         ))}
                       </select>
                     </label>
                     {!editingEquipmentId ? (
                       <div className="field field-span-2 inline-create-panel">
-                        <span>Category not listed?</span>
                         <div className="inline-create-grid">
                           <input
                             value={newStockCategoryName}
@@ -6455,7 +6722,6 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                         <span>Device bundle accessories</span>
                         {requiredStockAccessories.length > 0 ? (
                           <>
-                            <small className="field-hint">Required handover items</small>
                             <div className="accessory-checklist">
                               {requiredStockAccessories.map((accessory) => {
                                 const isChecked = stockForm.includedAccessories.includes(accessory);
@@ -6475,7 +6741,6 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                         ) : null}
                         {optionalStockAccessories.length > 0 ? (
                           <>
-                            <small className="field-hint">Optional or extra accessories</small>
                             <div className="accessory-checklist">
                               {optionalStockAccessories.map((accessory) => {
                                 const isChecked = stockForm.includedAccessories.includes(accessory);
@@ -6493,9 +6758,6 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                             </div>
                           </>
                         ) : null}
-                        <small className="field-hint">
-                          {selectedAccessoryProfile?.guidance || "Capture the full handover kit and add any extra accessories issued with this asset."}
-                        </small>
                       </div>
                     ) : null}
                     <label className="field field-span-2">
@@ -6516,9 +6778,6 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                           Add accessory
                         </button>
                       </div>
-                      <small className="field-hint">
-                        Use this for items outside the standard kit. Added items will appear in the checklist above.
-                      </small>
                     </label>
                     <label className="field field-span-2">
                       <span>Accessory notes</span>
@@ -6529,35 +6788,36 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                         placeholder="Optional: charger size, monitor type, mouse model, or other issued items"
                       />
                     </label>
-                    <label className="field">
-                      <span>Status</span>
-                      <select
-                        value={stockForm.status}
-                        onChange={(event) => setStockForm((current) => ({ ...current, status: event.target.value }))}
-                      >
-                        <option value="available">Available</option>
-                        <option value="assigned">Assigned</option>
-                        <option value="maintenance">Maintenance</option>
-                        <option value="retired">Retired</option>
-                        <option value="lost">Lost</option>
-                      </select>
-                      <small className="field-hint">
-                        Items marked as available will appear in the warehouse available stock list after registration.
-                      </small>
-                    </label>
-                    <label className="field">
-                      <span>Device health</span>
-                      <select
-                        value={stockForm.deviceHealth}
-                        onChange={(event) => setStockForm((current) => ({ ...current, deviceHealth: event.target.value }))}
-                      >
-                        <option value="Healthy">Healthy</option>
-                        <option value="Needs attention">Needs attention</option>
-                        <option value="Damaged">Damaged</option>
-                        <option value="Faulty">Faulty</option>
-                        <option value="Refurbished">Refurbished</option>
-                      </select>
-                    </label>
+                    {editingEquipmentId ? (
+                      <>
+                        <label className="field">
+                          <span>Status</span>
+                          <select
+                            value={stockForm.status}
+                            onChange={(event) => setStockForm((current) => ({ ...current, status: event.target.value }))}
+                          >
+                            <option value="available">Available</option>
+                            <option value="assigned">Assigned</option>
+                            <option value="maintenance">Maintenance</option>
+                            <option value="retired">Retired</option>
+                            <option value="lost">Lost</option>
+                          </select>
+                        </label>
+                        <label className="field">
+                          <span>Device health</span>
+                          <select
+                            value={stockForm.deviceHealth}
+                            onChange={(event) => setStockForm((current) => ({ ...current, deviceHealth: event.target.value }))}
+                          >
+                            <option value="Healthy">Healthy</option>
+                            <option value="Needs attention">Needs attention</option>
+                            <option value="Damaged">Damaged</option>
+                            <option value="Faulty">Faulty</option>
+                            <option value="Refurbished">Refurbished</option>
+                          </select>
+                        </label>
+                      </>
+                    ) : null}
                     <label className="field">
                       <span>Purchase year</span>
                       <input
@@ -6811,9 +7071,6 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                   <div className="panel-header">
                     <div>
                       <h3 id="hr-request-modal-title">{editingRequestId ? "Update HR Equipment Request" : "Create HR Equipment Request"}</h3>
-                      <p className="hr-modal-intro">
-                        HR only selects the employee and equipment category here. IT Support will review the employee HRMS profile and confirm the right device specification.
-                      </p>
                     </div>
                     <button className="secondary-btn compact-btn" type="button" onClick={() => setIsHrRequestModalOpen(false)}>
                       Close
@@ -6826,11 +7083,16 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                         value={hrEmployeeIdSearch}
                         onChange={(event) => {
                           const nextValue = event.target.value;
+                          const normalizedSearch = nextValue.trim().toLowerCase();
+                          const nextMatches = normalizedSearch
+                            ? employees.filter((employee) => matchesHrEmployeeRequestSearch(employee, normalizedSearch))
+                            : [];
+                          const firstMatch = nextMatches[0] ?? null;
                           setHrEmployeeIdSearch(nextValue);
                           setRequestForm((current) => ({
                             ...current,
-                            hrmsEmployeeRecordId: "",
-                            targetEmployeeUserId: "",
+                            hrmsEmployeeRecordId: firstMatch ? String(firstMatch.id) : "",
+                            targetEmployeeUserId: firstMatch?.linked_user_id ? String(firstMatch.linked_user_id) : "",
                           }));
                         }}
                         placeholder="Search by employee name, EMP code, or HRMS ID"
@@ -6849,15 +7111,19 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                             targetEmployeeUserId: selectedEmployee?.linked_user_id ? String(selectedEmployee.linked_user_id) : "",
                           }));
                         }}
-                        disabled={!normalizedHrEmployeeIdSearch}
+                        disabled={!normalizedHrEmployeeIdSearch || filteredHrEmployeesForRequest.length === 0}
                         required
                       >
                         <option value="">
-                          {normalizedHrEmployeeIdSearch ? "Select matched employee" : "Search employee first"}
+                          {normalizedHrEmployeeIdSearch
+                            ? filteredHrEmployeesForRequest.length > 0
+                              ? "Select matched employee"
+                              : "No matched employee found"
+                            : "Search employee first"}
                         </option>
                         {filteredHrEmployeesForRequest.map((employee) => (
                           <option key={employee.id} value={employee.id}>
-                            {employee.full_name} / {(employee.hrms_employee_id || employee.employee_code || "NO-ID")}
+                            {getHrEmployeeRequestOptionLabel(employee)}
                           </option>
                         ))}
                       </select>
@@ -6883,10 +7149,11 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                       <select
                         value={requestForm.categoryId}
                         onChange={(event) => setRequestForm((current) => ({ ...current, categoryId: event.target.value }))}
+                        disabled={hrRequestCategories.length === 0}
                         required
                       >
-                        <option value="">Select category</option>
-                        {categories.map((category) => (
+                        <option value="">{hrRequestCategories.length === 0 ? "No warehouse category available" : "Select category"}</option>
+                        {hrRequestCategories.map((category) => (
                           <option key={category.id} value={category.id}>
                             {category.name}
                           </option>
@@ -6959,7 +7226,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       );
     }
 
-    if (roleView === "it-manager") {
+    if (isItLeadershipView) {
       return (
         <section className="dashboard-panel">
           <div className="panel-header">
@@ -7980,7 +8247,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       );
     }
 
-    if (roleView === "it-manager") {
+    if (isItLeadershipView) {
       return (
         <section className="dashboard-panel">
           <div className="panel-header">
@@ -8104,12 +8371,6 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       const returnedStockCurrentPage = Math.min(requestPageByKey[returnedStockPageKey] || 1, returnedStockTotalPages);
       const paginatedReturnedStock = paginateRows(filteredReturnedHoldingAssignments, returnedStockCurrentPage, returnedStockPageSize);
 
-      const disposedStockPageKey = "stock-disposed-items";
-      const disposedStockPageSize = pageSizeByKey[disposedStockPageKey] || DEFAULT_ITEMS_PER_PAGE;
-      const disposedStockTotalPages = Math.max(Math.ceil(filteredDisposedEquipment.length / disposedStockPageSize), 1);
-      const disposedStockCurrentPage = Math.min(requestPageByKey[disposedStockPageKey] || 1, disposedStockTotalPages);
-      const paginatedDisposedStock = paginateRows(filteredDisposedEquipment, disposedStockCurrentPage, disposedStockPageSize);
-
       const branchStockItems = equipment.filter(
         (item) => item.stock_location !== "warehouse_stock" && (!user.branchId || item.branch_id === user.branchId),
       );
@@ -8127,11 +8388,30 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
           item.replacement_condition_status,
         ),
       );
-      const addedItemsPageKey = "stock-added-items";
-      const addedItemsPageSize = pageSizeByKey[addedItemsPageKey] || DEFAULT_ITEMS_PER_PAGE;
-      const addedItemsTotalPages = Math.max(Math.ceil(filteredBranchStockItems.length / addedItemsPageSize), 1);
-      const addedItemsCurrentPage = Math.min(requestPageByKey[addedItemsPageKey] || 1, addedItemsTotalPages);
-      const paginatedBranchStockItems = paginateRows(filteredBranchStockItems, addedItemsCurrentPage, addedItemsPageSize);
+      const selectedStockItems = filteredBranchStockItems.filter((item) => {
+        if (stockControlView === "available") {
+          return item.status === "available";
+        }
+
+        if (stockControlView === "assigned") {
+          return item.status === "assigned";
+        }
+
+        if (stockControlView === "returned") {
+          return false;
+        }
+
+        if (stockControlView === "retired") {
+          return item.status === "retired" || item.status === "lost";
+        }
+
+        return true;
+      });
+      const stockTablePageKey = `stock-${stockControlView}-items`;
+      const stockTablePageSize = pageSizeByKey[stockTablePageKey] || DEFAULT_ITEMS_PER_PAGE;
+      const stockTableTotalPages = Math.max(Math.ceil(selectedStockItems.length / stockTablePageSize), 1);
+      const stockTableCurrentPage = Math.min(requestPageByKey[stockTablePageKey] || 1, stockTableTotalPages);
+      const paginatedStockItems = paginateRows(selectedStockItems, stockTableCurrentPage, stockTablePageSize);
 
       return (
         <section className="dashboard-panel">
@@ -8143,8 +8423,10 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
           <div className="stock-control-filter-bar">
             <div className="filter-chip-row">
               {([
+                { key: "all", label: "All", total: filteredBranchStockItems.length },
                 { key: "available", label: "Available", total: filteredLocalAvailableEquipment.length },
                 { key: "returned", label: "Returned", total: filteredReturnedHoldingAssignments.length },
+                { key: "assigned", label: "Assigned", total: filteredBranchStockItems.filter((item) => item.status === "assigned").length },
                 { key: "retired", label: "Retired", total: filteredDisposedEquipment.length },
               ] as Array<{ key: StockControlView; label: string; total: number }>).map((option) => (
                 <button
@@ -8166,107 +8448,117 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
               aria-label="Search IT support stock"
             />
           </div>
-          {stockControlView === "available" ? (
-            <article className="inventory-focus-card">
-              <div className="panel-header">
-                <h3>
-                  <PackageCheck size={18} strokeWidth={2.2} />
-                  <span>Available</span>
-                </h3>
-                <span>{filteredLocalAvailableEquipment.length}</span>
-              </div>
-              <div className="user-table workflow-stock-table workflow-stock-table-compact workflow-stock-table-simple">
-                <div className="user-table-head workflow-stock-table-head">
-                  <span>Asset</span>
-                  <span>Status / Type</span>
-                  <span>Location</span>
-                  <span>Warranty / Health</span>
-                  <span>Actions</span>
-                </div>
-                {filteredLocalAvailableEquipment.length > 0 ? (
-                  paginatedAvailableStock.map((item) => (
-                    <div className="user-table-row workflow-stock-table-row" key={`available-${item.id}`}>
-                      <div className="user-primary-cell">
-                        <strong>{item.asset_tag}</strong>
-                        <span>{item.serial_number}</span>
-                      </div>
-                      <div className="user-secondary-cell">
-                        <strong>{item.equipment_name}</strong>
-                        <span>
-                          <span className={`status-pill status-${item.status}`}>{item.status}</span>
-                        </span>
-                      </div>
-                      <div className="user-secondary-cell">
-                        <strong>{getEquipmentLocationLabel(item)}</strong>
-                        <span>{getEquipmentLocationDetail(item)}</span>
-                      </div>
-                      <div className="user-secondary-cell">
-                        <strong>{item.warranty_end_date ? item.warranty_end_date.slice(0, 10) : "Not set"}</strong>
-                        <span>{item.device_health || "No health status"}</span>
-                      </div>
-                      <div className="table-action-group workflow-stock-table-actions">
-                        <button className="table-action table-action-neutral" type="button" onClick={() => void openDetailPanel("equipment", item.id)}>
-                          <Eye size={15} strokeWidth={2.2} />
-                          View details
-                        </button>
-                        <button className="table-action table-action-info" type="button" onClick={() => void handlePreviewEquipmentQr(item, activeSection, "modal")}>
-                          <ScanQrCode size={15} strokeWidth={2.2} />
-                          QR code
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <p className="loading-text">No available devices.</p>
-                )}
-              </div>
-              {renderPaginationBar(availableStockPageKey, filteredLocalAvailableEquipment.length, availableStockCurrentPage, availableStockPageSize, (page) =>
-                setRequestPageByKey((current) => ({
-                  ...current,
-                  [availableStockPageKey]: page,
-                }))
-              )}
-            </article>
-          ) : null}
-          {stockControlView === "returned" ? (
-            <article className="inventory-focus-card">
-              <div className="panel-header">
-                <h3>
+          <article className="inventory-focus-card">
+            <div className="panel-header">
+              <h3>
+                {stockControlView === "retired" ? (
+                  <TriangleAlert size={18} strokeWidth={2.2} />
+                ) : stockControlView === "returned" ? (
                   <RotateCcw size={18} strokeWidth={2.2} />
-                  <span>Returned</span>
-                </h3>
-                <span>{filteredReturnedHoldingAssignments.length}</span>
-              </div>
-              <div className="user-table workflow-assignment-table workflow-stock-table-compact workflow-assignment-table-simple">
-                <div className="user-table-head workflow-assignment-table-head">
-                  <span>Asset</span>
-                  <span>Status / Employee</span>
-                  <span>Specs / Category</span>
-                  <span>Assigned / Return</span>
-                  <span>Actions</span>
+                ) : (
+                  <PackageCheck size={18} strokeWidth={2.2} />
+                )}
+                <span>
+                  {stockControlView === "all"
+                    ? "All stock"
+                    : stockControlView === "available"
+                      ? "Available"
+                      : stockControlView === "returned"
+                        ? "Returned"
+                        : stockControlView === "assigned"
+                          ? "Assigned"
+                          : "Retired"}
+                </span>
+              </h3>
+              <span>{stockControlView === "returned" ? filteredReturnedHoldingAssignments.length : selectedStockItems.length}</span>
+            </div>
+            {stockControlView === "returned" ? (
+              <>
+                <div className="user-table workflow-assignment-table workflow-stock-table-compact workflow-assignment-table-simple">
+                  <div className="user-table-head workflow-assignment-table-head">
+                    <span>Asset</span>
+                    <span>Status / Employee</span>
+                    <span>Specs / Category</span>
+                    <span>Assigned / Return</span>
+                    <span>Actions</span>
+                  </div>
+                  {paginatedReturnedStock.length > 0 ? (
+                    paginatedReturnedStock.map(({ assignment, equipment: item }) =>
+                      item ? (
+                        <div className="user-table-row workflow-assignment-table-row" key={`returned-${assignment.id}`}>
+                          <div className="user-primary-cell">
+                            <strong>{item.asset_tag}</strong>
+                            <span>{item.serial_number}</span>
+                          </div>
+                          <div className="user-secondary-cell">
+                            <strong>{item.equipment_name}</strong>
+                            <span>{assignment.employee_name || "No employee"}</span>
+                          </div>
+                          <div className="user-secondary-cell">
+                            <strong>{item.category_name || "No category"}</strong>
+                            <span>{formatAssignmentEquipmentSpecs(assignment) || "No specs"}</span>
+                          </div>
+                          <div className="user-secondary-cell">
+                            <strong>{formatProfileDate(assignment.assigned_at)}</strong>
+                            <span>Return: {formatProfileDate(assignment.expected_return_date)}</span>
+                          </div>
+                          <div className="table-action-group workflow-stock-table-actions">
+                            <button className="table-action table-action-neutral" type="button" onClick={() => void openDetailPanel("assignment", assignment.id)}>
+                              <Eye size={15} strokeWidth={2.2} />
+                              View details
+                            </button>
+                            <button className="table-action table-action-info" type="button" onClick={() => void handlePreviewEquipmentQr(item, activeSection, "modal")}>
+                              <ScanQrCode size={15} strokeWidth={2.2} />
+                              QR code
+                            </button>
+                          </div>
+                        </div>
+                      ) : null,
+                    )
+                  ) : (
+                    <p className="loading-text">No returned devices.</p>
+                  )}
                 </div>
-                {filteredReturnedHoldingAssignments.length > 0 ? (
-                  paginatedReturnedStock.map(({ assignment, equipment: item }) =>
-                    item ? (
-                      <div className="user-table-row workflow-assignment-table-row" key={`returned-${assignment.id}`}>
+                {renderPaginationBar(returnedStockPageKey, filteredReturnedHoldingAssignments.length, returnedStockCurrentPage, returnedStockPageSize, (page) =>
+                  setRequestPageByKey((current) => ({
+                    ...current,
+                    [returnedStockPageKey]: page,
+                  }))
+                )}
+              </>
+            ) : (
+              <>
+                <div className="user-table workflow-stock-table workflow-stock-table-simple it-support-added-items-table">
+                  <div className="user-table-head workflow-stock-table-head">
+                    <span>Asset</span>
+                    <span>Status / Type</span>
+                    <span>Location</span>
+                    <span>Warranty / Health</span>
+                    <span>Actions</span>
+                  </div>
+                  {paginatedStockItems.length > 0 ? (
+                    paginatedStockItems.map((item) => (
+                      <div className="user-table-row workflow-stock-table-row" key={item.id}>
                         <div className="user-primary-cell">
                           <strong>{item.asset_tag}</strong>
                           <span>{item.serial_number}</span>
                         </div>
                         <div className="user-secondary-cell">
                           <strong>{item.equipment_name}</strong>
-                          <span>{assignment.employee_name || "No employee"}</span>
+                          <span>
+                            <span className={`status-pill status-${item.status}`}>{item.status}</span>
+                          </span>
                         </div>
                         <div className="user-secondary-cell">
-                          <strong>{item.category_name || "No category"}</strong>
-                          <span>{formatAssignmentEquipmentSpecs(assignment) || "No specs"}</span>
+                          <strong>{getEquipmentLocationLabel(item)}</strong>
+                          <span>{getEquipmentLocationDetail(item)}</span>
                         </div>
                         <div className="user-secondary-cell">
-                          <strong>{formatProfileDate(assignment.assigned_at)}</strong>
-                          <span>Return: {formatProfileDate(assignment.expected_return_date)}</span>
+                          <strong>{item.warranty_end_date ? item.warranty_end_date.slice(0, 10) : "Not set"}</strong>
+                          <span>{item.device_health || item.replacement_condition_status || "No health status"}</span>
                         </div>
                         <div className="table-action-group workflow-stock-table-actions">
-                          <button className="table-action table-action-neutral" type="button" onClick={() => void openDetailPanel("assignment", assignment.id)}>
+                          <button className="table-action table-action-neutral" type="button" onClick={() => void openDetailPanel("equipment", item.id)}>
                             <Eye size={15} strokeWidth={2.2} />
                             View details
                           </button>
@@ -8276,147 +8568,20 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                           </button>
                         </div>
                       </div>
-                    ) : null,
-                  )
-                ) : (
-                  <p className="loading-text">No returned devices.</p>
-                )}
-              </div>
-              {renderPaginationBar(returnedStockPageKey, filteredReturnedHoldingAssignments.length, returnedStockCurrentPage, returnedStockPageSize, (page) =>
-                setRequestPageByKey((current) => ({
-                  ...current,
-                  [returnedStockPageKey]: page,
-                }))
-              )}
-            </article>
-          ) : null}
-          {stockControlView === "retired" ? (
-            <article className="inventory-focus-card">
-              <div className="panel-header">
-                <h3>
-                  <TriangleAlert size={18} strokeWidth={2.2} />
-                  <span>Retired</span>
-                </h3>
-                <span>{filteredDisposedEquipment.length}</span>
-              </div>
-              <div className="user-table workflow-stock-table workflow-stock-table-compact workflow-stock-table-simple">
-                <div className="user-table-head workflow-stock-table-head">
-                  <span>Asset</span>
-                  <span>Status / Type</span>
-                  <span>Location</span>
-                  <span>Warranty / Health</span>
-                  <span>Actions</span>
+                    ))
+                  ) : (
+                    <p className="loading-text">No stock items match that filter.</p>
+                  )}
                 </div>
-                {filteredDisposedEquipment.length > 0 ? (
-                  paginatedDisposedStock.map((item) => (
-                    <div className="user-table-row workflow-stock-table-row" key={`disposed-${item.id}`}>
-                      <div className="user-primary-cell">
-                        <strong>{item.asset_tag}</strong>
-                        <span>{item.serial_number}</span>
-                      </div>
-                      <div className="user-secondary-cell">
-                        <strong>{item.equipment_name}</strong>
-                        <span>
-                          <span className={`status-pill status-${item.status}`}>{item.status}</span>
-                        </span>
-                      </div>
-                      <div className="user-secondary-cell">
-                        <strong>{getEquipmentLocationLabel(item)}</strong>
-                        <span>{getEquipmentLocationDetail(item)}</span>
-                      </div>
-                      <div className="user-secondary-cell">
-                        <strong>{item.warranty_end_date ? item.warranty_end_date.slice(0, 10) : "Not set"}</strong>
-                        <span>{item.device_health || item.replacement_condition_status || "No health status"}</span>
-                      </div>
-                      <div className="table-action-group workflow-stock-table-actions">
-                        <button className="table-action table-action-neutral" type="button" onClick={() => void openDetailPanel("equipment", item.id)}>
-                          <Eye size={15} strokeWidth={2.2} />
-                          View details
-                        </button>
-                        <button className="table-action table-action-info" type="button" onClick={() => void handlePreviewEquipmentQr(item, activeSection, "modal")}>
-                          <ScanQrCode size={15} strokeWidth={2.2} />
-                          QR code
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <p className="loading-text">No retired items.</p>
+                {renderPaginationBar(stockTablePageKey, selectedStockItems.length, stockTableCurrentPage, stockTablePageSize, (page) =>
+                  setRequestPageByKey((current) => ({
+                    ...current,
+                    [stockTablePageKey]: page,
+                  }))
                 )}
-              </div>
-              {renderPaginationBar(disposedStockPageKey, filteredDisposedEquipment.length, disposedStockCurrentPage, disposedStockPageSize, (page) =>
-                setRequestPageByKey((current) => ({
-                  ...current,
-                  [disposedStockPageKey]: page,
-                }))
-              )}
-            </article>
-          ) : null}
-          <div className="subpanel-header">
-            <h4>Added Items</h4>
-            <button
-              className="secondary-btn compact-btn"
-              type="button"
-              onClick={() => setIsStockListOpen((current) => !current)}
-            >
-              {isStockListOpen ? "Hide items" : "Show items"}
-            </button>
-          </div>
-          {isStockListOpen ? (
-            <>
-            <div className="user-table workflow-stock-table workflow-stock-table-simple it-support-added-items-table">
-              <div className="user-table-head workflow-stock-table-head">
-                <span>Asset</span>
-                <span>Status / Type</span>
-                <span>Location</span>
-                <span>Warranty / Health</span>
-                <span>Actions</span>
-              </div>
-              {paginatedBranchStockItems.length > 0 ? (
-                paginatedBranchStockItems.map((item) => (
-                  <div className="user-table-row workflow-stock-table-row" key={item.id}>
-                    <div className="user-primary-cell">
-                      <strong>{item.asset_tag}</strong>
-                      <span>{item.serial_number}</span>
-                    </div>
-                    <div className="user-secondary-cell">
-                      <strong>{item.equipment_name}</strong>
-                      <span>
-                        <span className={`status-pill status-${item.status}`}>{item.status}</span>
-                      </span>
-                    </div>
-                    <div className="user-secondary-cell">
-                      <strong>{getEquipmentLocationLabel(item)}</strong>
-                      <span>{getEquipmentLocationDetail(item)}</span>
-                    </div>
-                    <div className="user-secondary-cell">
-                      <strong>{item.warranty_end_date ? item.warranty_end_date.slice(0, 10) : "Not set"}</strong>
-                      <span>{item.device_health || item.replacement_condition_status || "No health status"}</span>
-                    </div>
-                    <div className="table-action-group workflow-stock-table-actions">
-                      <button className="table-action table-action-neutral" type="button" onClick={() => void openDetailPanel("equipment", item.id)}>
-                        <Eye size={15} strokeWidth={2.2} />
-                        View details
-                      </button>
-                      <button className="table-action table-action-info" type="button" onClick={() => void handlePreviewEquipmentQr(item, activeSection, "modal")}>
-                        <ScanQrCode size={15} strokeWidth={2.2} />
-                        QR code
-                      </button>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <p className="loading-text">No stock items match that search.</p>
-              )}
-            </div>
-            {renderPaginationBar(addedItemsPageKey, filteredBranchStockItems.length, addedItemsCurrentPage, addedItemsPageSize, (page) =>
-              setRequestPageByKey((current) => ({
-                ...current,
-                [addedItemsPageKey]: page,
-              }))
+              </>
             )}
-            </>
-          ) : null}
+          </article>
           {isEquipmentQrModalOpen ? (
             <div className="hr-modal-overlay" role="presentation" onClick={() => setIsEquipmentQrModalOpen(false)}>
               <section
@@ -9015,24 +9180,33 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                 </button>
                 {assignment.status === "returned" && isReplacementAssignment(assignment) ? null : assignment.received_confirmed_at ? null : (
                   <div className="card-form-stack workflow-inline-form">
-                  <textarea
-                    value={receiptNotes[assignment.id] || ""}
-                    onChange={(event) =>
-                      setReceiptNotes((current) => ({
-                        ...current,
-                        [assignment.id]: event.target.value,
-                      }))
-                    }
-                    placeholder="Optional receipt note, condition, or handover comment"
-                  />
-                  <button
-                    className="primary-btn compact-btn"
-                    type="button"
-                    onClick={() => void handleConfirmReceipt(assignment.id)}
-                    disabled={assignment.status !== "active"}
-                  >
-                    Confirm received
-                  </button>
+                    <button
+                      className="secondary-btn compact-btn workflow-note-trigger"
+                      type="button"
+                      onClick={() => toggleNoteEditor(`receipt-note-${assignment.id}`)}
+                    >
+                      {isNoteEditorOpen(`receipt-note-${assignment.id}`) ? "Hide comment" : "Add comment"}
+                    </button>
+                    {isNoteEditorOpen(`receipt-note-${assignment.id}`) ? (
+                      <textarea
+                        value={receiptNotes[assignment.id] || ""}
+                        onChange={(event) =>
+                          setReceiptNotes((current) => ({
+                            ...current,
+                            [assignment.id]: event.target.value,
+                          }))
+                        }
+                        placeholder="Optional receipt note, condition, or handover comment"
+                      />
+                    ) : null}
+                    <button
+                      className="primary-btn compact-btn"
+                      type="button"
+                      onClick={() => void handleConfirmReceipt(assignment.id)}
+                      disabled={assignment.status !== "active"}
+                    >
+                      Confirm received
+                    </button>
                   </div>
                 )}
               </div>
@@ -9096,8 +9270,8 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       return (
         <section className="dashboard-panel">
           <div className="panel-header">
-            <h3>IT Director Final Return Approvals</h3>
-            <span>{pendingFinalReturnApprovals.length} waiting for IT Director</span>
+            <h3>{itLeadershipLabel} Final Return Approvals</h3>
+            <span>{pendingFinalReturnApprovals.length} waiting for {itLeadershipLabel}</span>
           </div>
           <div className="user-table workflow-return-table">
             <div className="user-table-head workflow-return-table-head">
@@ -9139,7 +9313,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                 <div className="workflow-table-actions">
                 <div className="fulfillment-control-grid">
                   <label className="field">
-                    <span>IT Director decision</span>
+                    <span>{itLeadershipLabel} decision</span>
                     <select
                       value={form.decision}
                       onChange={(event) =>
@@ -9157,26 +9331,37 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                     </select>
                   </label>
                 </div>
-                <label className="field">
-                  <span>{isRejecting ? "Rejection reason" : "Approval note"}</span>
-                  <textarea
-                    value={form.note}
-                    onChange={(event) =>
-                      setFinalReturnApprovalForm((current) => ({
-                        ...current,
-                        [item.id]: {
-                          ...form,
-                          note: event.target.value,
-                        },
-                      }))
-                    }
-                    placeholder={
-                      isRejecting
-                        ? "Explain why IT Director cannot approve this final stock return"
-                        : "Optional compliance, stock, or security note"
-                    }
-                  />
-                </label>
+                <div className="card-form-stack workflow-note-editor">
+                  <button
+                    className="secondary-btn compact-btn workflow-note-trigger"
+                    type="button"
+                    onClick={() => toggleNoteEditor(`it-director-final-return-note-${item.id}`)}
+                  >
+                    {isNoteEditorOpen(`it-director-final-return-note-${item.id}`) ? "Hide comment" : "Add comment"}
+                  </button>
+                  {isNoteEditorOpen(`it-director-final-return-note-${item.id}`) ? (
+                    <label className="field">
+                      <span>{isRejecting ? "Rejection reason" : "Approval note"}</span>
+                      <textarea
+                        value={form.note}
+                        onChange={(event) =>
+                          setFinalReturnApprovalForm((current) => ({
+                            ...current,
+                            [item.id]: {
+                              ...form,
+                              note: event.target.value,
+                            },
+                          }))
+                        }
+                        placeholder={
+                          isRejecting
+                            ? `Explain why ${itLeadershipLabel} cannot approve this final stock return`
+                            : "Optional compliance, stock, or security note"
+                        }
+                      />
+                    </label>
+                  ) : null}
+                </div>
                 <button
                   className={`primary-btn compact-btn ${isRejecting ? "btn-danger" : "btn-success"}`}
                   type="button"
@@ -9189,7 +9374,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
             );
               })
             ) : (
-              <p className="loading-text">No returns are waiting for IT Director final approval right now.</p>
+              <p className="loading-text">No returns are waiting for {itLeadershipLabel} final approval right now.</p>
             )}
           </div>
           {renderPaginationBar(pageKey, pendingFinalReturnApprovals.length, currentPage, pageSize, (page) =>
@@ -9218,7 +9403,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
           <span>{relevantReturns.length} returns with documents</span>
         </div>
         <p className="dashboard-subtitle">
-          View documents attached during device returns. IT Support engineers are notified automatically when an employee submits a return.
+          Review employee return letters, then notify IT Support when the device is physically handed back to HR.
         </p>
         <div className="user-table workflow-return-table">
           <div className="user-table-head workflow-return-table-head">
@@ -9227,6 +9412,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
             <span>Return Details</span>
             <span>Document</span>
             <span>Status</span>
+            <span>Actions</span>
           </div>
           {relevantReturns.length > 0 ? (
             relevantReturns.map((item) => (
@@ -9259,7 +9445,23 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                 </div>
                 <div className="user-secondary-cell">
                   <strong>{formatReturnStatus(item.return_status)}</strong>
-                  <span>{item.it_manager_name ? `IT: ${item.it_manager_name}` : "IT review pending"}</span>
+                  <span>{formatHrNotificationStatus(item)}</span>
+                  <span>{item.hr_notified_it_at ? `Sent: ${formatProfileDate(item.hr_notified_it_at)}` : item.it_manager_name ? `IT: ${item.it_manager_name}` : "IT review pending"}</span>
+                </div>
+                <div className="table-action-group workflow-stock-table-actions">
+                  {item.return_reason === "leaving_job" ? (
+                    <button
+                      className={`table-action ${item.hr_notified_it_at ? "table-action-neutral" : "table-action-info"}`}
+                      type="button"
+                      onClick={() => void handleHrNotifyIt(item.id)}
+                      disabled={Boolean(item.hr_notified_it_at) || item.return_status !== "it_review"}
+                    >
+                      <Bell size={15} strokeWidth={2.2} />
+                      {item.hr_notified_it_at ? "IT notified" : "Notify IT Support"}
+                    </button>
+                  ) : (
+                    <span className="field-hint">No HR action needed</span>
+                  )}
                 </div>
               </div>
             ))
@@ -9399,6 +9601,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                 };
                 const isRejecting = form.action === "reject";
                 const isReturningToEmployee = form.action === "return_to_employee";
+                const hrNotificationPending = isHrNotificationPending(item);
 
                 return (
                   <div className="user-table-row workflow-return-table-row" key={item.id}>
@@ -9429,7 +9632,16 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                     <div className="user-secondary-cell">
                       <strong>{form.conditionStatus}</strong>
                       <span>Disposition: {form.disposition}</span>
-                      <span>{isRejecting ? "Return rejected" : isReturningToEmployee ? "Returning to employee" : "Review in progress"}</span>
+                      <span>{formatHrNotificationStatus(item)}</span>
+                      <span>
+                        {hrNotificationPending
+                          ? "Waiting for HR Recruitment to notify IT Support"
+                          : isRejecting
+                            ? "Return rejected"
+                            : isReturningToEmployee
+                              ? "Returning to employee"
+                              : "Review in progress"}
+                      </span>
                     </div>
                     <div className="workflow-table-actions">
                     <div className="fulfillment-control-grid">
@@ -9467,7 +9679,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                               },
                             }))
                           }
-                          disabled={isRejecting}
+                          disabled={isRejecting || hrNotificationPending}
                         >
                           <option value="good">Good</option>
                           <option value="fair">Fair</option>
@@ -9488,7 +9700,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                               },
                             }))
                           }
-                          disabled={isRejecting || isReturningToEmployee}
+                          disabled={isRejecting || isReturningToEmployee || hrNotificationPending}
                         >
                           <option value="available">Back to stock</option>
                           <option value="maintenance">Needs maintenance</option>
@@ -9497,40 +9709,64 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                         </select>
                       </label>
                     </div>
-                    <label className="field">
-                      <span>
-                        {isRejecting
-                          ? "Rejection reason"
-                          : isReturningToEmployee
-                            ? "Return-to-employee note"
-                            : "IT Support receipt note, device status, and accessories"}
-                      </span>
-                      <textarea
-                        value={form.reviewNote}
-                        onChange={(event) =>
-                          setItReturnReviewForm((current) => ({
-                            ...current,
-                            [item.id]: {
-                              ...form,
-                              reviewNote: event.target.value,
-                            },
-                          }))
-                        }
-                        placeholder={
-                          isRejecting
-                            ? "Explain why this return cannot continue"
-                            : isReturningToEmployee
-                              ? "Explain why the employee keeps the device"
-                              : "Record health, missing or returned accessories, charger, bag, keyboard, mouse, and any observed condition details"
-                        }
-                      />
-                    </label>
+                    <div className="card-form-stack workflow-note-editor">
+                      <button
+                        className="secondary-btn compact-btn workflow-note-trigger"
+                        type="button"
+                        onClick={() => toggleNoteEditor(`it-review-note-${item.id}`)}
+                        disabled={hrNotificationPending}
+                      >
+                        {isNoteEditorOpen(`it-review-note-${item.id}`) ? "Hide comment" : "Add comment"}
+                      </button>
+                      {isNoteEditorOpen(`it-review-note-${item.id}`) ? (
+                        <label className="field">
+                          <span>
+                            {isRejecting
+                              ? "Rejection reason"
+                              : isReturningToEmployee
+                                ? "Return-to-employee note"
+                                : "IT Support receipt note, device status, and accessories"}
+                          </span>
+                          <textarea
+                            value={form.reviewNote}
+                            onChange={(event) =>
+                              setItReturnReviewForm((current) => ({
+                                ...current,
+                                [item.id]: {
+                                  ...form,
+                                  reviewNote: event.target.value,
+                                },
+                              }))
+                            }
+                            disabled={hrNotificationPending}
+                            placeholder={
+                              hrNotificationPending
+                                ? "Waiting for HR Recruitment to click Notify IT Support after receiving the device"
+                                : isRejecting
+                                ? "Explain why this return cannot continue"
+                                : isReturningToEmployee
+                                  ? "Explain why the employee keeps the device"
+                                  : "Record health, missing or returned accessories, charger, bag, keyboard, mouse, and any observed condition details"
+                            }
+                          />
+                        </label>
+                      ) : null}
+                    </div>
                     <button
                       className={`primary-btn compact-btn ${isRejecting ? "btn-danger" : isReturningToEmployee ? "btn-success" : "btn-warning"}`}
                       type="button"
                       onClick={() => void handleItReturnReview(item.id)}
+                      disabled={hrNotificationPending}
                     >
-                      {isRejecting ? "Reject return" : isReturningToEmployee ? "Return to employee" : item.return_reason === "leaving_job" ? "Acknowledge and send for final approval" : "Record assessment"}
+                      {hrNotificationPending
+                        ? "Waiting for HR notification"
+                        : isRejecting
+                          ? "Reject return"
+                          : isReturningToEmployee
+                            ? "Return to employee"
+                            : item.return_reason === "leaving_job"
+                              ? "Acknowledge and send for final approval"
+                              : "Record assessment"}
                     </button>
                     </div>
                   </div>
@@ -9655,22 +9891,33 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                     </select>
                   </label>
                 </div>
-                <label className="field">
-                  <span>{isRejecting ? "Rejection reason" : "IT support intake note"}</span>
-                  <textarea
-                    value={form.intakeNote}
-                    onChange={(event) =>
-                      setReturnProcessForm((current) => ({
-                        ...current,
-                        [item.id]: {
-                          ...form,
-                          intakeNote: event.target.value,
-                        },
-                      }))
-                    }
-                    placeholder={isRejecting ? "Explain why this return cannot be accepted" : "Record condition, accessories, or next action"}
-                  />
-                </label>
+                <div className="card-form-stack workflow-note-editor">
+                  <button
+                    className="secondary-btn compact-btn workflow-note-trigger"
+                    type="button"
+                    onClick={() => toggleNoteEditor(`store-intake-note-${item.id}`)}
+                  >
+                    {isNoteEditorOpen(`store-intake-note-${item.id}`) ? "Hide comment" : "Add comment"}
+                  </button>
+                  {isNoteEditorOpen(`store-intake-note-${item.id}`) ? (
+                    <label className="field">
+                      <span>{isRejecting ? "Rejection reason" : "IT support intake note"}</span>
+                      <textarea
+                        value={form.intakeNote}
+                        onChange={(event) =>
+                          setReturnProcessForm((current) => ({
+                            ...current,
+                            [item.id]: {
+                              ...form,
+                              intakeNote: event.target.value,
+                            },
+                          }))
+                        }
+                        placeholder={isRejecting ? "Explain why this return cannot be accepted" : "Record condition, accessories, or next action"}
+                      />
+                    </label>
+                  ) : null}
+                </div>
                 <button
                   className={`primary-btn compact-btn ${isRejecting ? "btn-danger" : form.disposition === "lost" || form.disposition === "retired" ? "btn-warning" : "btn-success"}`}
                   type="button"
@@ -9775,22 +10022,33 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                       </select>
                     </label>
                   </div>
-                  <label className="field">
-                    <span>Resolution note</span>
-                    <textarea
-                      value={form.resolutionNote}
-                      onChange={(event) =>
-                        setMaintenanceCloseForm((current) => ({
-                          ...current,
-                          [record.id]: {
-                            ...form,
-                            resolutionNote: event.target.value,
-                          },
-                        }))
-                      }
-                      placeholder="Repair result, parts replaced, or reason it is wasted/destroyed"
-                    />
-                  </label>
+                  <div className="card-form-stack workflow-note-editor">
+                    <button
+                      className="secondary-btn compact-btn workflow-note-trigger"
+                      type="button"
+                      onClick={() => toggleNoteEditor(`maintenance-note-${record.id}`)}
+                    >
+                      {isNoteEditorOpen(`maintenance-note-${record.id}`) ? "Hide comment" : "Add comment"}
+                    </button>
+                    {isNoteEditorOpen(`maintenance-note-${record.id}`) ? (
+                      <label className="field">
+                        <span>Resolution note</span>
+                        <textarea
+                          value={form.resolutionNote}
+                          onChange={(event) =>
+                            setMaintenanceCloseForm((current) => ({
+                              ...current,
+                              [record.id]: {
+                                ...form,
+                                resolutionNote: event.target.value,
+                              },
+                            }))
+                          }
+                          placeholder="Repair result, parts replaced, or reason it is wasted/destroyed"
+                        />
+                      </label>
+                    ) : null}
+                  </div>
                   <button
                     className={`primary-btn compact-btn ${form.finalDisposition === "lost" || form.finalDisposition === "retired" ? "btn-warning" : "btn-success"}`}
                     type="button"
@@ -9892,24 +10150,36 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                       <option value="leaving_job">Employee leaving job</option>
                     </select>
                   </label>
-                  <label className="field">
-                    <span>Return note</span>
-                    <textarea
-                      value={returnRequestNotes[assignment.id] || ""}
-                      onChange={(event) =>
-                        setReturnRequestNotes((current) => ({
-                          ...current,
-                          [assignment.id]: event.target.value,
-                        }))
-                      }
-                      placeholder={
-                        isLeavingJobReturn
-                          ? "Add device condition, accessories handed over, and any missing items"
-                          : "Add condition, reason, or handover note"
-                      }
+                  <div className="card-form-stack workflow-note-editor">
+                    <button
+                      className="secondary-btn compact-btn workflow-note-trigger"
+                      type="button"
+                      onClick={() => toggleNoteEditor(`employee-return-note-${assignment.id}`)}
                       disabled={hasPendingReturn}
-                    />
-                  </label>
+                    >
+                      {isNoteEditorOpen(`employee-return-note-${assignment.id}`) ? "Hide comment" : "Add comment"}
+                    </button>
+                    {isNoteEditorOpen(`employee-return-note-${assignment.id}`) ? (
+                      <label className="field">
+                        <span>Return note</span>
+                        <textarea
+                          value={returnRequestNotes[assignment.id] || ""}
+                          onChange={(event) =>
+                            setReturnRequestNotes((current) => ({
+                              ...current,
+                              [assignment.id]: event.target.value,
+                            }))
+                          }
+                          placeholder={
+                            isLeavingJobReturn
+                              ? "Add device condition, accessories handed over, and any missing items"
+                              : "Add condition, reason, or handover note"
+                          }
+                          disabled={hasPendingReturn}
+                        />
+                      </label>
+                    ) : null}
+                  </div>
                   {isLeavingJobReturn ? (
                     <label className="field">
                       <span>Supporting document for HR recruitment (required)</span>
@@ -10009,6 +10279,10 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
   const renderSettingsSection = () => <AccountSettingsPanel user={user} onUserUpdate={onUserUpdate} />;
 
   const renderSection = () => {
+    if (roleView === "it-infrastructure" && activeSection !== "overview" && activeSection !== "settings") {
+      return renderOverview();
+    }
+
     if (activeSection === "overview") {
       return renderOverview();
     }
@@ -10053,7 +10327,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
     }
 
     if (activeSection === "returns") {
-      if (roleView === "it-manager") {
+      if (isItLeadershipView) {
         return renderItManagerReturnChecksSection();
       }
       if (roleView === "hr") {
@@ -10074,6 +10348,9 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
     }
 
     if (activeSection === "notifications") {
+      if (roleView === "it-security") {
+        return renderOverview();
+      }
       return renderNotificationsSection();
     }
 
@@ -10359,7 +10636,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
         ) : null}
         {selectedTimelineWorkflowRequest ? (
           <div className="session-warning-overlay" role="presentation" onClick={() => setSelectedTimelineWorkflowRequestId(null)}>
-            <div className="session-warning-card report-detail-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="session-warning-card report-detail-modal approval-workflow-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
               <div className="notification-modal-header">
                 <div>
                   <p className="session-warning-kicker">Timeline</p>

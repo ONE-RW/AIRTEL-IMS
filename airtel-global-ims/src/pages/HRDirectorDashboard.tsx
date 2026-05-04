@@ -162,8 +162,8 @@ const employmentStatusOptions = [
   "Retired",
 ];
 
-const DEFAULT_ITEMS_PER_PAGE = 6;
-const PAGE_SIZE_OPTIONS = [6, 12, 18];
+const DEFAULT_ITEMS_PER_PAGE = 10;
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboardProps) {
   const [activeSection, setActiveSection] = useState("overview");
@@ -190,6 +190,7 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
   const [selectedReportKey, setSelectedReportKey] = useState("");
   const [pageByKey, setPageByKey] = useState<Record<string, number>>({});
   const [pageSizeByKey, setPageSizeByKey] = useState<Record<string, number>>({});
+  const [expandedNoteEditors, setExpandedNoteEditors] = useState<Record<string, boolean>>({});
   const [selectedApprovalNoteRequest, setSelectedApprovalNoteRequest] = useState<WorkflowRequestRow | null>(null);
   const [approvalsSearchTerm, setApprovalsSearchTerm] = useState("");
   const [approvalsDateWindow, setApprovalsDateWindow] = useState<DateWindowFilter>("all");
@@ -339,6 +340,15 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
       </div>
     );
   };
+
+  const toggleNoteEditor = (editorKey: string) => {
+    setExpandedNoteEditors((current) => ({
+      ...current,
+      [editorKey]: !current[editorKey],
+    }));
+  };
+
+  const isNoteEditorOpen = (editorKey: string) => Boolean(expandedNoteEditors[editorKey]);
 
   function isHeadquarterBranch(branchName: string) {
     return /\bHQ\b/i.test(branchName);
@@ -1423,20 +1433,32 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
                   </button>
                 </div>
                 <div className="workflow-table-actions">
-                  <label className="field">
-                    <span>Approval note, or required reason if returning/rejecting</span>
-                    <textarea
-                      value={approvalNotes[request.id] || ""}
-                      onChange={(event) =>
-                        setApprovalNotes((current) => ({
-                          ...current,
-                          [request.id]: event.target.value,
-                        }))
-                      }
-                      placeholder="Add approval context, compliance note, or rejection reason"
+                  <div className="card-form-stack workflow-note-editor">
+                    <button
+                      className="secondary-btn compact-btn workflow-note-trigger"
+                      type="button"
+                      onClick={() => toggleNoteEditor(`hrd-approval-note-${request.id}`)}
                       disabled={isSubmitting}
-                    />
-                  </label>
+                    >
+                      {isNoteEditorOpen(`hrd-approval-note-${request.id}`) ? "Hide comment" : "Add comment"}
+                    </button>
+                    {isNoteEditorOpen(`hrd-approval-note-${request.id}`) ? (
+                      <label className="field">
+                        <span>Approval note, or required reason if returning/rejecting</span>
+                        <textarea
+                          value={approvalNotes[request.id] || ""}
+                          onChange={(event) =>
+                            setApprovalNotes((current) => ({
+                              ...current,
+                              [request.id]: event.target.value,
+                            }))
+                          }
+                          placeholder="Add approval context, compliance note, or rejection reason"
+                          disabled={isSubmitting}
+                        />
+                      </label>
+                    ) : null}
+                  </div>
 
                   <div className="card-action-row">
                     <button className="primary-btn compact-btn btn-success" type="button" onClick={() => void handleApproveRequest(request.id)} disabled={isSubmitting}>
@@ -1824,23 +1846,35 @@ function HRDirectorDashboard({ user, onLogout, onUserUpdate }: HRDirectorDashboa
                     </select>
                   </label>
 
-                  <label className="field">
-                    <span>{isRejecting ? "Rejection reason" : "Approval note"}</span>
-                    <textarea
-                      value={form.note}
-                      onChange={(event) =>
-                        setFinalReturnApprovalForm((current) => ({
-                          ...current,
-                          [item.id]: {
-                            ...form,
-                            note: event.target.value,
-                          },
-                        }))
-                      }
-                      placeholder={isRejecting ? "Explain why HR Director cannot approve this device return" : "Optional offboarding or compliance note"}
+                  <div className="card-form-stack workflow-note-editor">
+                    <button
+                      className="secondary-btn compact-btn workflow-note-trigger"
+                      type="button"
+                      onClick={() => toggleNoteEditor(`hrd-final-return-note-${item.id}`)}
                       disabled={isSubmitting}
-                    />
-                  </label>
+                    >
+                      {isNoteEditorOpen(`hrd-final-return-note-${item.id}`) ? "Hide comment" : "Add comment"}
+                    </button>
+                    {isNoteEditorOpen(`hrd-final-return-note-${item.id}`) ? (
+                      <label className="field">
+                        <span>{isRejecting ? "Rejection reason" : "Approval note"}</span>
+                        <textarea
+                          value={form.note}
+                          onChange={(event) =>
+                            setFinalReturnApprovalForm((current) => ({
+                              ...current,
+                              [item.id]: {
+                                ...form,
+                                note: event.target.value,
+                              },
+                            }))
+                          }
+                          placeholder={isRejecting ? "Explain why HR Director cannot approve this device return" : "Optional offboarding or compliance note"}
+                          disabled={isSubmitting}
+                        />
+                      </label>
+                    ) : null}
+                  </div>
 
                   <div className="card-action-row">
                     <button className={`primary-btn compact-btn ${isRejecting ? "btn-danger" : "btn-success"}`} type="button" onClick={() => void handleFinalReturnApproval(item.id)} disabled={isSubmitting}>

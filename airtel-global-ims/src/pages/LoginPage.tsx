@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, KeyRound, LockKeyhole, Mail, ShieldCheck, UserRound } from "lucide-react";
 import AirtelLogo from "../components/AirtelLogo";
 import DashboardWaveLoader from "../components/DashboardWaveLoader";
 import { fetchJson, getApiMessage } from "../api";
@@ -520,7 +520,9 @@ function LoginPage({ onLoginSuccess }: LoginPageProps) {
         <div className="auth-form-panel">
           <div className="auth-form-header">
             <p className="eyebrow">{isOtpStep ? "Verification" : isForgotPasswordMode ? "Password reset" : isResetPasswordMode ? "Set new password" : "Login"}</p>
-            <h2>{isOtpStep ? "Verify sign in" : isForgotPasswordMode ? "Forgot password" : isResetPasswordMode ? "Create new password" : "Welcome back"}</h2>
+            {isOtpStep || isForgotPasswordMode || isResetPasswordMode ? (
+              <h2>{isOtpStep ? "Verify sign in" : isForgotPasswordMode ? "Forgot password" : "Create new password"}</h2>
+            ) : null}
             <p>
               {isOtpStep
                 ? "Enter the verification code from your email."
@@ -552,16 +554,19 @@ function LoginPage({ onLoginSuccess }: LoginPageProps) {
             <form className="login-form" onSubmit={handleVerifyOtp}>
               <label className="field">
                 <span>Verification code</span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={otpCode}
-                  onChange={(event) => setOtpCode(event.target.value.replace(/\D/g, "").slice(0, OTP_LENGTH))}
-                  placeholder={`Sent to ${emailHint}`}
-                  maxLength={OTP_LENGTH}
-                  autoFocus
-                  required
-                />
+                <div className="input-with-icon">
+                  <ShieldCheck className="field-icon" size={20} aria-hidden="true" />
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={otpCode}
+                    onChange={(event) => setOtpCode(event.target.value.replace(/\D/g, "").slice(0, OTP_LENGTH))}
+                    placeholder={`Sent to ${emailHint}`}
+                    maxLength={OTP_LENGTH}
+                    autoFocus
+                    required
+                  />
+                </div>
               </label>
 
               {loginMessage ? <p className="form-message success-text">{loginMessage}</p> : null}
@@ -588,13 +593,16 @@ function LoginPage({ onLoginSuccess }: LoginPageProps) {
             <form className="login-form" onSubmit={handleRequestPasswordReset}>
               <label className="field">
                 <span>Email address</span>
-                <input
-                  type="email"
-                  value={resetEmail}
-                  onChange={(event) => setResetEmail(event.target.value)}
-                  placeholder="Enter your account email"
-                  required
-                />
+                <div className="input-with-icon">
+                  <Mail className="field-icon" size={20} aria-hidden="true" />
+                  <input
+                    type="email"
+                    value={resetEmail}
+                    onChange={(event) => setResetEmail(event.target.value)}
+                    placeholder="Enter your account email"
+                    required
+                  />
+                </div>
               </label>
 
               {loginMessage ? <p className="form-message success-text">{loginMessage}</p> : null}
@@ -622,26 +630,32 @@ function LoginPage({ onLoginSuccess }: LoginPageProps) {
             <form className="login-form" onSubmit={handleCompletePasswordReset}>
               <label className="field">
                 <span>New password</span>
-                <input
-                  type="password"
-                  value={newPassword}
-                  onChange={(event) => setNewPassword(event.target.value)}
-                  placeholder="Create new password"
-                  required
-                  disabled={isValidatingResetToken}
-                />
+                <div className="input-with-icon">
+                  <LockKeyhole className="field-icon" size={20} aria-hidden="true" />
+                  <input
+                    type="password"
+                    value={newPassword}
+                    onChange={(event) => setNewPassword(event.target.value)}
+                    placeholder="Create new password"
+                    required
+                    disabled={isValidatingResetToken}
+                  />
+                </div>
               </label>
 
               <label className="field">
                 <span>Confirm new password</span>
-                <input
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(event) => setConfirmPassword(event.target.value)}
-                  placeholder="Confirm new password"
-                  required
-                  disabled={isValidatingResetToken}
-                />
+                <div className="input-with-icon">
+                  <KeyRound className="field-icon" size={20} aria-hidden="true" />
+                  <input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(event) => setConfirmPassword(event.target.value)}
+                    placeholder="Confirm new password"
+                    required
+                    disabled={isValidatingResetToken}
+                  />
+                </div>
               </label>
 
               {loginMessage ? <p className="form-message success-text">{loginMessage}</p> : null}
@@ -675,21 +689,25 @@ function LoginPage({ onLoginSuccess }: LoginPageProps) {
             <form className="login-form" onSubmit={handleLogin}>
               <label className="field">
                 <span>Email address or phone number</span>
-                <input
-                  type="text"
-                  value={identifier}
-                  onChange={(event) => {
-                    setIdentifier(event.target.value);
-                    setLoginFieldErrors((currentErrors) => ({ ...currentErrors, identifier: "" }));
-                  }}
-                  placeholder="Enter your email or phone number"
-                />
+                <div className="input-with-icon">
+                  <UserRound className="field-icon" size={20} aria-hidden="true" />
+                  <input
+                    type="text"
+                    value={identifier}
+                    onChange={(event) => {
+                      setIdentifier(event.target.value);
+                      setLoginFieldErrors((currentErrors) => ({ ...currentErrors, identifier: "" }));
+                    }}
+                    placeholder="Enter your email or phone number"
+                  />
+                </div>
                 {loginFieldErrors.identifier ? <span className="field-error">{loginFieldErrors.identifier}</span> : null}
               </label>
 
               <label className="field">
                 <span>Password</span>
                 <div className="password-field-shell">
+                  <LockKeyhole className="field-icon" size={20} aria-hidden="true" />
                   <input
                     type={showPassword ? "text" : "password"}
                     value={password}

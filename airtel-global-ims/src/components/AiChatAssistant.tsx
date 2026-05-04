@@ -43,7 +43,7 @@ function getStarterPrompts(role: string) {
     ];
   }
 
-  if (role === "IT Support engineer" || role === "IT officer" || role === "IT security manager") {
+  if (role === "IT Support engineer" || role === "IT officer") {
     return [
       "How many devices are available in my branch?",
       "Show assets under maintenance",
@@ -57,6 +57,17 @@ function getStarterPrompts(role: string) {
   if (role === "IT Director" || role === "IT infrastructure manager") {
     return [
       "What requests are waiting for IT approval?",
+      "Summarize open issues",
+      "Show maintenance workload",
+      "How is device depreciation calculated?",
+      "How does replacement recommendation work?",
+      "What makes this project special?",
+    ];
+  }
+
+  if (role === "IT Security manager") {
+    return [
+      "What requests are waiting for security review?",
       "Summarize open issues",
       "Show maintenance workload",
       "How is device depreciation calculated?",

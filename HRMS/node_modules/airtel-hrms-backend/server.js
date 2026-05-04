@@ -110,6 +110,11 @@ function normalizeRole(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function normalizePositiveInteger(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 function extractTrailingNumber(value) {
   const match = String(value || "").match(/(\d+)\s*$/);
   if (!match) {
@@ -460,6 +465,8 @@ async function ensureSchema() {
       department_name VARCHAR(40) NULL,
       ims_user_id BIGINT NULL,
       ims_account_status VARCHAR(40) NULL,
+      ims_role_id BIGINT NULL,
+      ims_role_name VARCHAR(120) NULL,
       status ENUM('active', 'inactive', 'pending') NOT NULL DEFAULT 'active',
       created_by_user_id BIGINT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -493,15 +500,20 @@ async function ensureSchema() {
   await pool.query("ALTER TABLE hr_employees DROP COLUMN IF EXISTS country_name");
   await pool.query("ALTER TABLE hr_users MODIFY COLUMN first_name VARCHAR(40) NOT NULL");
   await pool.query("ALTER TABLE hr_users MODIFY COLUMN last_name VARCHAR(40) NOT NULL");
+  await pool.query("ALTER TABLE hr_users MODIFY COLUMN email VARCHAR(180) NOT NULL");
   await pool.query("ALTER TABLE hr_users MODIFY COLUMN role_name VARCHAR(40) NOT NULL");
   await pool.query("ALTER TABLE hr_users ADD COLUMN IF NOT EXISTS ims_user_id BIGINT NULL UNIQUE AFTER id");
   await pool.query("ALTER TABLE hr_employees MODIFY COLUMN employee_code VARCHAR(255) NULL");
   await pool.query("ALTER TABLE hr_employees MODIFY COLUMN hrms_employee_id VARCHAR(255) NULL");
   await pool.query("ALTER TABLE hr_employees MODIFY COLUMN first_name VARCHAR(40) NOT NULL");
   await pool.query("ALTER TABLE hr_employees MODIFY COLUMN last_name VARCHAR(40) NOT NULL");
+  await pool.query("ALTER TABLE hr_employees MODIFY COLUMN email VARCHAR(180) NOT NULL");
   await pool.query("ALTER TABLE hr_employees MODIFY COLUMN phone_number VARCHAR(13) NULL");
   await pool.query("ALTER TABLE hr_employees MODIFY COLUMN employee_grade VARCHAR(40) NULL");
   await pool.query("ALTER TABLE hr_employees MODIFY COLUMN department_name VARCHAR(40) NULL");
+  await pool.query("ALTER TABLE hrms_sessions MODIFY COLUMN user_email VARCHAR(180) NOT NULL");
+  await pool.query("ALTER TABLE hr_employees ADD COLUMN IF NOT EXISTS ims_role_id BIGINT NULL AFTER ims_account_status");
+  await pool.query("ALTER TABLE hr_employees ADD COLUMN IF NOT EXISTS ims_role_name VARCHAR(120) NULL AFTER ims_role_id");
   await pool.query("DELETE FROM hrms_sessions WHERE expires_at <= NOW() OR revoked_at IS NOT NULL");
 
   await pool.query(
@@ -620,6 +632,8 @@ async function getImsUserByIdentifier(identifier) {
         u.phone_number,
         u.password_hash,
         u.status,
+        u.role_id,
+        u.must_change_password,
         u.job_title,
         u.employment_status,
         u.office_location,
@@ -664,6 +678,8 @@ async function getImsUserById(userId) {
         u.phone_number,
         u.password_hash,
         u.status,
+        u.role_id,
+        u.must_change_password,
         u.job_title,
         u.employment_status,
         u.office_location,
@@ -704,7 +720,75 @@ async function getImsEmployeeRoleId() {
   return employeeRoleIdPromise;
 }
 
-async function upsertHrEmployeeImsLink(employeeId, linkedUserId, linkedUserStatus) {
+async function getAssignableImsRoles() {
+  const [rows] = await imsPool.query(
+    `
+      SELECT id, name, description
+      FROM roles
+      WHERE LOWER(name) NOT IN ('admin', 'global system administrator')
+      ORDER BY name ASC
+    `,
+  );
+
+  const excludedRoles = new Set(["hr department", "it officer"]);
+  const dedupedRoles = new Map();
+
+  for (const row of rows) {
+    const normalizedName = normalizeRole(row.name);
+
+    if (!normalizedName || excludedRoles.has(normalizedName)) {
+      continue;
+    }
+
+    const dedupeKey =
+      normalizedName === "infrastructure manager" || normalizedName === "it infrastructure manager"
+        ? "it infrastructure manager"
+        : normalizedName;
+    const nextRole = {
+      id: Number(row.id),
+      name: row.name,
+      description: row.description || "",
+    };
+    const existingRole = dedupedRoles.get(dedupeKey);
+    const nextIsPreferred = dedupeKey === "it infrastructure manager" && normalizedName === "it infrastructure manager";
+
+    if (!existingRole || nextIsPreferred) {
+      dedupedRoles.set(dedupeKey, nextRole);
+    }
+  }
+
+  return Array.from(dedupedRoles.values()).sort((left, right) => left.name.localeCompare(right.name));
+}
+
+async function getImsRoleById(roleId) {
+  const normalizedRoleId = normalizePositiveInteger(roleId);
+
+  if (!normalizedRoleId) {
+    return null;
+  }
+
+  const [rows] = await imsPool.query(
+    `
+      SELECT id, name, description
+      FROM roles
+      WHERE id = ?
+      LIMIT 1
+    `,
+    [normalizedRoleId],
+  );
+
+  if (!rows.length) {
+    return null;
+  }
+
+  return {
+    id: Number(rows[0].id),
+    name: rows[0].name,
+    description: rows[0].description || "",
+  };
+}
+
+async function upsertHrEmployeeImsLink(employeeId, linkedUserId, linkedUserStatus, linkedRoleId = null, linkedRoleName = null) {
   if (!employeeId) {
     return;
   }
@@ -714,12 +798,16 @@ async function upsertHrEmployeeImsLink(employeeId, linkedUserId, linkedUserStatu
       UPDATE hr_employees
       SET
         ims_user_id = ?,
-        ims_account_status = ?
+        ims_account_status = ?,
+        ims_role_id = ?,
+        ims_role_name = ?
       WHERE id = ?
     `,
     [
       linkedUserId ? Number(linkedUserId) : null,
       normalizeOptionalText(linkedUserStatus, 40),
+      normalizePositiveInteger(linkedRoleId),
+      normalizeOptionalText(linkedRoleName, 120),
       Number(employeeId),
     ],
   );
@@ -731,17 +819,26 @@ async function ensureImsUserForHrEmployee(employee, { sendWelcomeEmail = false, 
       linkedUserId: null,
       linkedUserStatus: null,
       welcomeMessage: null,
+      credentials: null,
     };
   }
 
-  const employeeRoleId = await getImsEmployeeRoleId();
-  if (!employeeRoleId) {
+  const fallbackEmployeeRoleId = await getImsEmployeeRoleId();
+  if (!fallbackEmployeeRoleId) {
     throw new Error("Employee role is not configured in IMS.");
+  }
+
+  const requestedRoleId = normalizePositiveInteger(employee.ims_role_id) || fallbackEmployeeRoleId;
+  const requestedRole = await getImsRoleById(requestedRoleId);
+
+  if (!requestedRole) {
+    throw new Error("The selected IMS role is not configured in IMS.");
   }
 
   const employeeCode = readEmployeeCode(employee);
   const hrmsEmployeeId = readHrmsEmployeeId(employee);
   let linkedUser = employee.ims_user_id ? await getImsUserById(employee.ims_user_id) : null;
+  let credentials = null;
 
   if (!linkedUser && hrmsEmployeeId) {
     const [rows] = await imsPool.query(
@@ -767,6 +864,7 @@ async function ensureImsUserForHrEmployee(employee, { sendWelcomeEmail = false, 
       linkedUserId: null,
       linkedUserStatus: null,
       welcomeMessage: null,
+      credentials: null,
     };
   }
 
@@ -803,7 +901,7 @@ async function ensureImsUserForHrEmployee(employee, { sendWelcomeEmail = false, 
         employee.phone_number || null,
         employeeCode || null,
         hashPassword(temporaryPassword),
-        employeeRoleId,
+        requestedRole.id,
         employee.department_id || null,
         null,
         null,
@@ -827,6 +925,10 @@ async function ensureImsUserForHrEmployee(employee, { sendWelcomeEmail = false, 
         password: temporaryPassword,
       });
 
+      credentials = {
+        email: employee.email,
+        temporaryPassword,
+      };
       welcomeMessage = emailResult.sent
         ? "IMS welcome email sent with a temporary password."
         : `${emailResult.configurationHint} An email preview was written to the backend log.`;
@@ -841,6 +943,7 @@ async function ensureImsUserForHrEmployee(employee, { sendWelcomeEmail = false, 
           email = ?,
           phone_number = ?,
           employee_code = ?,
+          role_id = ?,
           job_title = ?,
           employment_status = ?,
           office_location = ?,
@@ -857,6 +960,7 @@ async function ensureImsUserForHrEmployee(employee, { sendWelcomeEmail = false, 
         employee.email,
         employee.phone_number || null,
         employeeCode || null,
+        requestedRole.id,
         employee.job_title || null,
         employee.employment_status || null,
         employee.office_location || null,
@@ -875,7 +979,56 @@ async function ensureImsUserForHrEmployee(employee, { sendWelcomeEmail = false, 
   return {
     linkedUserId: Number(linkedUser?.id || 0) || null,
     linkedUserStatus: linkedUser?.status || normalizeEmployeeStatusForIms(employee.status),
+    linkedRoleId: normalizePositiveInteger(linkedUser?.role_id) || requestedRole.id,
+    linkedRoleName: linkedUser?.role_name || requestedRole.name,
     welcomeMessage,
+    credentials,
+  };
+}
+
+async function resendImsCredentialsForHrEmployee(employee) {
+  if (!employee?.email) {
+    throw new Error("This employee does not have an email address.");
+  }
+
+  const syncResult = await ensureImsUserForHrEmployee(employee, { createIfMissing: true });
+  const linkedUserId = normalizePositiveInteger(syncResult.linkedUserId);
+
+  if (!linkedUserId) {
+    throw new Error("Unable to prepare the linked IMS account for this employee.");
+  }
+
+  const temporaryPassword = generateTemporaryPassword();
+  await imsPool.query(
+    `
+      UPDATE users
+      SET
+        password_hash = ?,
+        must_change_password = 1
+      WHERE id = ?
+    `,
+    [hashPassword(temporaryPassword), linkedUserId],
+  );
+
+  const emailResult = await sendAccountCreatedEmail({
+    email: employee.email,
+    firstName: employee.first_name,
+    lastName: employee.last_name,
+    password: temporaryPassword,
+  });
+
+  return {
+    linkedUserId,
+    linkedUserStatus: syncResult.linkedUserStatus,
+    linkedRoleId: syncResult.linkedRoleId,
+    linkedRoleName: syncResult.linkedRoleName,
+    credentials: {
+      email: employee.email,
+      temporaryPassword,
+    },
+    message: emailResult.sent
+      ? "Login credentials email sent with a new temporary password."
+      : `${emailResult.configurationHint} An email preview was written to the backend log.`,
   };
 }
 
@@ -885,7 +1038,13 @@ async function syncEmployeeLinkState(employee) {
   }
 
   const syncResult = await ensureImsUserForHrEmployee(employee, { createIfMissing: true });
-  await upsertHrEmployeeImsLink(employee.id, syncResult.linkedUserId, syncResult.linkedUserStatus);
+  await upsertHrEmployeeImsLink(
+    employee.id,
+    syncResult.linkedUserId,
+    syncResult.linkedUserStatus,
+    syncResult.linkedRoleId,
+    syncResult.linkedRoleName,
+  );
   const [rows] = await pool.query("SELECT * FROM hr_employees WHERE id = ? LIMIT 1", [Number(employee.id)]);
   return rows[0] ?? employee;
 }
@@ -1040,6 +1199,8 @@ function mapEmployee(row) {
     department_name: row.department_name,
     linked_user_id: row.ims_user_id,
     ims_account_status: row.ims_account_status,
+    ims_role_id: row.ims_role_id ? Number(row.ims_role_id) : null,
+    ims_role_name: row.ims_role_name || null,
     status: row.status,
     recommended_device_profile: recommendation.profile,
     recommended_device_reason: recommendation.reason,
@@ -1053,6 +1214,9 @@ function mapHrUser(row) {
     lastName: row.last_name,
     fullName: `${row.first_name || ""} ${row.last_name || ""}`.trim(),
     email: row.email,
+    phoneNumber: row.phone_number || "",
+    departmentName: row.department_name || "",
+    jobTitle: row.job_title || "",
     role: row.role_name,
     status: row.status,
   };
@@ -1210,14 +1374,7 @@ app.post("/api/auth/login", async (req, res) => {
     return res.json({
       message: "HRMS login successful.",
       token: sessionToken,
-      user: {
-        id: user.id,
-        firstName: user.first_name,
-        lastName: user.last_name,
-        email: user.email,
-        role: user.role_name,
-        status: user.status,
-      },
+      user: mapHrUser(user),
     });
   } catch (error) {
     return res.status(500).json({ message: normalizeError(error) });
@@ -1278,6 +1435,113 @@ app.post("/api/auth/logout", async (req, res) => {
   }
 });
 
+app.post("/api/account/profile", async (req, res) => {
+  try {
+    const actor = await resolveDashboardActor(req);
+
+    if (!actor?.id) {
+      return res.status(401).json({ message: "Session expired or invalid." });
+    }
+
+    const firstName = normalizeRequiredText(req.body?.firstName, 40);
+    const lastName = normalizeRequiredText(req.body?.lastName, 40);
+    const email = normalizeRequiredText(req.body?.email, 180).toLowerCase();
+    const phoneNumber = normalizeOptionalText(req.body?.phoneNumber, 20);
+
+    if (!firstName || !lastName || !email) {
+      return res.status(400).json({ message: "First name, last name, and email are required." });
+    }
+
+    await imsPool.query(
+      `
+        UPDATE users
+        SET
+          first_name = ?,
+          last_name = ?,
+          email = ?,
+          phone_number = ?
+        WHERE id = ?
+      `,
+      [firstName, lastName, email, phoneNumber, Number(actor.id)],
+    );
+
+    const updatedUser = await getImsUserById(actor.id);
+
+    if (!updatedUser) {
+      return res.status(404).json({ message: "Unable to load the updated profile." });
+    }
+
+    await ensureHrShadowUser(updatedUser);
+
+    const currentToken = readBearerToken(req);
+    if (currentToken) {
+      await revokeHrmsSession(currentToken);
+    }
+
+    const nextToken = createSessionToken(updatedUser);
+    await persistHrmsSession(nextToken, updatedUser, "password");
+
+    return res.json({
+      message: "Profile updated successfully.",
+      token: nextToken,
+      user: mapHrUser(updatedUser),
+    });
+  } catch (error) {
+    return res.status(500).json({ message: normalizeError(error) });
+  }
+});
+
+app.post("/api/account/password", async (req, res) => {
+  try {
+    const actor = await resolveDashboardActor(req);
+
+    if (!actor?.id) {
+      return res.status(401).json({ message: "Session expired or invalid." });
+    }
+
+    const currentPassword = normalizeRequiredText(req.body?.currentPassword, 255);
+    const newPassword = normalizeRequiredText(req.body?.newPassword, 255);
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: "Current password and new password are required." });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: "New password must be at least 6 characters long." });
+    }
+
+    const currentUser = await getImsUserById(actor.id);
+
+    if (!currentUser || currentUser.password_hash !== hashPassword(currentPassword)) {
+      return res.status(400).json({ message: "Current password is incorrect." });
+    }
+
+    await imsPool.query(
+      `
+        UPDATE users
+        SET
+          password_hash = ?,
+          must_change_password = 0
+        WHERE id = ?
+      `,
+      [hashPassword(newPassword), Number(actor.id)],
+    );
+
+    const updatedUser = await getImsUserById(actor.id);
+
+    if (updatedUser) {
+      await ensureHrShadowUser(updatedUser);
+    }
+
+    return res.json({
+      message: "Password updated successfully.",
+      user: updatedUser ? mapHrUser(updatedUser) : null,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: normalizeError(error) });
+  }
+});
+
 app.get("/api/employees", async (req, res) => {
   try {
     const actor = await resolveActor(req);
@@ -1327,6 +1591,21 @@ app.get("/api/employees/:id", async (req, res) => {
   }
 });
 
+app.get("/api/roles", async (req, res) => {
+  try {
+    const actor = await resolveDashboardActor(req);
+
+    if (!actor) {
+      return res.status(401).json({ message: "Only the HR Recruitment Officer can load IMS roles." });
+    }
+
+    const roles = await getAssignableImsRoles();
+    return res.json({ roles });
+  } catch (error) {
+    return res.status(500).json({ message: normalizeError(error) });
+  }
+});
+
 app.post("/api/employees", async (req, res) => {
   try {
     const actor = await resolveActor(req);
@@ -1337,13 +1616,21 @@ app.post("/api/employees", async (req, res) => {
 
     const firstName = normalizeRequiredText(req.body?.firstName, 40);
     const lastName = normalizeRequiredText(req.body?.lastName, 40);
-    const email = normalizeRequiredText(req.body?.email, 180);
+    const email = normalizeRequiredText(req.body?.email, 180).toLowerCase();
+    const roleId = normalizePositiveInteger(req.body?.roleId);
 
-    if (!firstName || !lastName || !email) {
-      return res.status(400).json({ message: "First name, last name, and email are required." });
+    if (!firstName || !lastName || !email || !roleId) {
+      return res.status(400).json({ message: "First name, last name, email, and IMS role are required." });
     }
 
     const normalizedStatus = normalizeEmployeeStatus(req.body?.status);
+    const employmentStatus = normalizeOptionalText(req.body?.employmentStatus, 80) || normalizedStatus;
+    const imsRole = await getImsRoleById(roleId);
+
+    if (!imsRole) {
+      return res.status(400).json({ message: "The selected IMS role is invalid." });
+    }
+
     const generatedIdentifiers = await generateEmployeeIdentifiers();
 
     const [result] = await pool.query(
@@ -1362,10 +1649,12 @@ app.post("/api/employees", async (req, res) => {
           start_date,
           department_id,
           department_name,
+          ims_role_id,
+          ims_role_name,
           status,
           created_by_user_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         encryptHrmsIdentifier(generatedIdentifiers.employeeCode),
@@ -1376,11 +1665,13 @@ app.post("/api/employees", async (req, res) => {
         normalizeOptionalText(req.body?.phoneNumber, 13),
         normalizeOptionalText(req.body?.employeeGrade, 40),
         normalizeOptionalText(req.body?.jobTitle, 120),
-        normalizedStatus,
+        employmentStatus,
         normalizeOptionalText(req.body?.officeLocation, 180),
         normalizeOptionalText(req.body?.startDate, 20),
         req.body?.departmentId ? Number(req.body.departmentId) : null,
         normalizeOptionalText(req.body?.departmentName, 40),
+        imsRole.id,
+        imsRole.name,
         normalizedStatus,
         actor.local_hr_user_id || actor.id,
       ],
@@ -1392,7 +1683,13 @@ app.post("/api/employees", async (req, res) => {
     );
 
     const syncResult = await ensureImsUserForHrEmployee(rows[0], { sendWelcomeEmail: true });
-    await upsertHrEmployeeImsLink(rows[0].id, syncResult.linkedUserId, syncResult.linkedUserStatus);
+    await upsertHrEmployeeImsLink(
+      rows[0].id,
+      syncResult.linkedUserId,
+      syncResult.linkedUserStatus,
+      syncResult.linkedRoleId,
+      syncResult.linkedRoleName,
+    );
     const [syncedRows] = await pool.query("SELECT * FROM hr_employees WHERE id = ? LIMIT 1", [Number(result.insertId)]);
 
     return res.status(201).json({
@@ -1400,6 +1697,7 @@ app.post("/api/employees", async (req, res) => {
         ? `HRMS employee created successfully. ${syncResult.welcomeMessage}`
         : "HRMS employee created successfully.",
       employee: mapEmployee(syncedRows[0]),
+      credentials: syncResult.credentials,
     });
   } catch (error) {
     return res.status(500).json({ message: normalizeError(error) });
@@ -1417,13 +1715,20 @@ app.put("/api/employees/:id", async (req, res) => {
     const employeeId = Number(req.params.id);
     const firstName = normalizeRequiredText(req.body?.firstName, 40);
     const lastName = normalizeRequiredText(req.body?.lastName, 40);
-    const email = normalizeRequiredText(req.body?.email, 180);
+    const email = normalizeRequiredText(req.body?.email, 180).toLowerCase();
+    const roleId = normalizePositiveInteger(req.body?.roleId);
 
-    if (!employeeId || !firstName || !lastName || !email) {
-      return res.status(400).json({ message: "Employee id, first name, last name, and email are required." });
+    if (!employeeId || !firstName || !lastName || !email || !roleId) {
+      return res.status(400).json({ message: "Employee id, first name, last name, email, and IMS role are required." });
     }
 
     const normalizedStatus = normalizeEmployeeStatus(req.body?.status);
+    const employmentStatus = normalizeOptionalText(req.body?.employmentStatus, 80) || normalizedStatus;
+    const imsRole = await getImsRoleById(roleId);
+
+    if (!imsRole) {
+      return res.status(400).json({ message: "The selected IMS role is invalid." });
+    }
 
     const [result] = await pool.query(
       `
@@ -1444,6 +1749,8 @@ app.put("/api/employees/:id", async (req, res) => {
           department_name = ?,
           ims_user_id = ?,
           ims_account_status = ?,
+          ims_role_id = ?,
+          ims_role_name = ?,
           status = ?
         WHERE id = ?
       `,
@@ -1456,13 +1763,15 @@ app.put("/api/employees/:id", async (req, res) => {
         normalizeOptionalText(req.body?.phoneNumber, 13),
         normalizeOptionalText(req.body?.employeeGrade, 40),
         normalizeOptionalText(req.body?.jobTitle, 120),
-        normalizedStatus,
+        employmentStatus,
         normalizeOptionalText(req.body?.officeLocation, 180),
         normalizeOptionalText(req.body?.startDate, 20),
         req.body?.departmentId ? Number(req.body.departmentId) : null,
         normalizeOptionalText(req.body?.departmentName, 40),
         req.body?.imsUserId ? Number(req.body.imsUserId) : null,
         normalizeOptionalText(req.body?.imsAccountStatus, 40),
+        imsRole.id,
+        imsRole.name,
         normalizedStatus,
         employeeId,
       ],
@@ -1478,12 +1787,59 @@ app.put("/api/employees/:id", async (req, res) => {
     );
 
     const syncResult = await ensureImsUserForHrEmployee(rows[0]);
-    await upsertHrEmployeeImsLink(employeeId, syncResult.linkedUserId, syncResult.linkedUserStatus);
+    await upsertHrEmployeeImsLink(
+      employeeId,
+      syncResult.linkedUserId,
+      syncResult.linkedUserStatus,
+      syncResult.linkedRoleId,
+      syncResult.linkedRoleName,
+    );
     const [syncedRows] = await pool.query("SELECT * FROM hr_employees WHERE id = ? LIMIT 1", [employeeId]);
 
     return res.json({
       message: "HRMS employee updated successfully.",
       employee: mapEmployee(syncedRows[0]),
+    });
+  } catch (error) {
+    return res.status(500).json({ message: normalizeError(error) });
+  }
+});
+
+app.post("/api/employees/:id/resend-credentials", async (req, res) => {
+  try {
+    const actor = await resolveActor(req);
+
+    if (!canAccessHrmsDashboard(actor)) {
+      return res.status(401).json({ message: "Only the HR Recruitment Officer can resend employee credentials in HRMS." });
+    }
+
+    const employeeId = Number(req.params.id);
+
+    if (!employeeId) {
+      return res.status(400).json({ message: "A valid employee id is required." });
+    }
+
+    const [rows] = await pool.query("SELECT * FROM hr_employees WHERE id = ? LIMIT 1", [employeeId]);
+
+    if (!rows.length) {
+      return res.status(404).json({ message: "Employee not found." });
+    }
+
+    const employee = rows[0];
+    const resendResult = await resendImsCredentialsForHrEmployee(employee);
+    await upsertHrEmployeeImsLink(
+      employeeId,
+      resendResult.linkedUserId,
+      resendResult.linkedUserStatus,
+      resendResult.linkedRoleId,
+      resendResult.linkedRoleName,
+    );
+    const [syncedRows] = await pool.query("SELECT * FROM hr_employees WHERE id = ? LIMIT 1", [employeeId]);
+
+    return res.json({
+      message: resendResult.message,
+      employee: mapEmployee(syncedRows[0]),
+      credentials: resendResult.credentials,
     });
   } catch (error) {
     return res.status(500).json({ message: normalizeError(error) });

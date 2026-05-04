@@ -138,8 +138,8 @@ const employmentStatusOptions = [
   "Retired",
 ];
 
-const DEFAULT_ITEMS_PER_PAGE = 3;
-const PAGE_SIZE_OPTIONS = [3, 6, 9];
+const DEFAULT_ITEMS_PER_PAGE = 10;
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 function formatCurrencyAmount(value: number | null | undefined) {
   return Number(value ?? 0).toLocaleString("en-RW", {

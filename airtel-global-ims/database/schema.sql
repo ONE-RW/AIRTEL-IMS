@@ -313,6 +313,8 @@ CREATE TABLE returns (
   disposition VARCHAR(40) NULL,
   return_status ENUM('it_review', 'store_intake', 'awaiting_final_approval', 'maintenance', 'returned_to_employee', 'requested', 'completed', 'rejected') DEFAULT 'it_review',
   requested_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+  hr_notified_it_at TIMESTAMP NULL,
+  hr_notified_it_by BIGINT NULL,
   it_reviewed_at TIMESTAMP NULL,
   processed_at TIMESTAMP NULL,
   received_condition_comment TEXT NULL,

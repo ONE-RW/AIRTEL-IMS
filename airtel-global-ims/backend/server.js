@@ -27,7 +27,7 @@ const smtpUser = process.env.SMTP_USER || (isGmailSender ? smtpFrom : "");
 const smtpPass = process.env.SMTP_PASS || "";
 const mailPreviewRecipient = process.env.MAIL_PREVIEW_RECIPIENT || "";
 const isSmtpConfigured = Boolean(smtpHost && smtpUser && smtpPass && smtpFrom);
-const isEmailOtpEnabled = process.env.EMAIL_OTP_ENABLED === "true";
+const isEmailOtpEnabled = process.env.EMAIL_OTP_ENABLED !== "false";
 const otpExpiryMs = 5 * 60 * 1000;
 const otpTrustMs = 60 * 60 * 1000;
 const passwordResetExpiryMs = 30 * 60 * 1000;
@@ -2349,6 +2349,8 @@ async function ensureReturnsTable() {
       return_attachment_data LONGTEXT NULL,
       return_status ENUM('it_review', 'store_intake', 'awaiting_final_approval', 'maintenance', 'returned_to_employee', 'requested', 'completed', 'rejected') DEFAULT 'it_review',
       requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      hr_notified_it_at TIMESTAMP NULL,
+      hr_notified_it_by BIGINT NULL,
       it_reviewed_at TIMESTAMP NULL,
       processed_at TIMESTAMP NULL,
       INDEX idx_returns_assignment (assignment_id),
@@ -2425,6 +2427,16 @@ async function ensureReturnsTable() {
   await pool.query(`
     ALTER TABLE returns
     ADD COLUMN IF NOT EXISTS requested_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP
+  `);
+
+  await pool.query(`
+    ALTER TABLE returns
+    ADD COLUMN IF NOT EXISTS hr_notified_it_at TIMESTAMP NULL
+  `);
+
+  await pool.query(`
+    ALTER TABLE returns
+    ADD COLUMN IF NOT EXISTS hr_notified_it_by BIGINT NULL
   `);
 
   await pool.query(`
@@ -7012,6 +7024,8 @@ async function getWorkflowDashboardData(userId) {
         r.return_attachment_type,
         r.return_status,
         r.requested_at,
+        r.hr_notified_it_at,
+        r.hr_notified_it_by,
         r.it_reviewed_at,
         r.processed_at,
         r.final_hrd_approval_status,
@@ -11482,7 +11496,6 @@ app.post("/api/requests", async (req, res) => {
             ? `${requester.first_name} ${requester.last_name} submitted a loss or theft declaration that now requires ${firstStepRows[0].step_label}.`
             : `${requester.first_name} ${requester.last_name} submitted a ${requestTypeLabel.toLowerCase()} that now requires ${firstStepRows[0].step_label}.`,
           details: [
-            `Request ID: ${result.insertId}`,
             `Request type: ${requestTypeLabel}`,
             `Requested category: ${requestContext?.category_name || "Equipment request"}`,
             `Employee: ${employeeLabel}`,
@@ -11506,7 +11519,6 @@ app.post("/api/requests", async (req, res) => {
           ? "Your device loss or theft declaration has been recorded and sent for review."
           : `Your ${requestTypeLabel.toLowerCase()} has entered the approval workflow.`,
         details: [
-          `Request ID: ${result.insertId}`,
           `Request type: ${requestTypeLabel}`,
           `Requested category: ${requestContext?.category_name || "Requested equipment"}`,
           `Branch: ${requestContext?.branch_name || requestContext?.country_name || "Not assigned"}`,
@@ -11526,7 +11538,6 @@ app.post("/api/requests", async (req, res) => {
           ? `${requester.first_name} ${requester.last_name} submitted a loss or theft declaration on your behalf.`
           : `${requester.first_name} ${requester.last_name} submitted a ${requestTypeLabel.toLowerCase()} for you.`,
         details: [
-          `Request ID: ${result.insertId}`,
           `Request type: ${requestTypeLabel}`,
           `Requested category: ${requestContext?.category_name || "Requested equipment"}`,
           `Branch: ${requestContext?.branch_name || requestContext?.country_name || "Not assigned"}`,
@@ -11726,7 +11737,6 @@ app.post("/api/requests/:id/approve", async (req, res) => {
           headline: "A request needs your review",
           intro: `${currentStep.step_label} has been completed and the request now needs ${nextStepRows[0].step_label}.`,
           details: [
-            `Request ID: ${requestId}`,
             `Request type: ${getRequestTypeLabel(requestRows[0].request_type)}`,
             `Requester: ${requestContext?.requester_name || "Employee"}`,
             `Requested category: ${requestContext?.category_name || "Equipment request"}`,
@@ -11746,7 +11756,6 @@ app.post("/api/requests/:id/approve", async (req, res) => {
         headline: "Your request moved forward",
         intro: `${currentStep.step_label} approved your request.`,
         details: [
-          `Request ID: ${requestId}`,
           `Request type: ${getRequestTypeLabel(requestRows[0].request_type)}`,
           `Requested category: ${requestContext?.category_name || "Equipment request"}`,
           `Current status: ${nextStatus}`,
@@ -11846,7 +11855,6 @@ app.post("/api/requests/:id/reject", async (req, res) => {
         headline: "Your request was rejected",
         intro: `${currentStep.step_label} rejected your equipment request.`,
         details: [
-          `Request ID: ${requestId}`,
           `Requested category: ${requestContext?.category_name || "Equipment request"}`,
           `Reason: ${rejectionReason}`,
         ],
@@ -11977,7 +11985,6 @@ app.post("/api/requests/:id/keep-device", async (req, res) => {
         headline: "Your replacement request was completed without a new device.",
         intro: `${currentStep.step_label} closed your request and confirmed that the current device can stay in service.`,
         details: [
-          `Request ID: ${requestId}`,
           `Request type: ${getRequestTypeLabel(requestRecord.request_type)}`,
           `Requested category: ${requestContext?.category_name || "Equipment request"}`,
           actionNote ? `Notes: ${actionNote}` : "No additional notes provided.",
@@ -12099,7 +12106,6 @@ app.post("/api/requests/:id/return", async (req, res) => {
         headline: "Your request needs more detail",
         intro: `${currentStep.step_label} returned your request so you can clarify the information provided.`,
         details: [
-          `Request ID: ${requestId}`,
           `Requested category: ${requestContext?.category_name || "Equipment request"}`,
           `Reason: ${clarificationReason}`,
         ],
@@ -12431,7 +12437,6 @@ app.post("/api/requests/:id/fulfillment-status", async (req, res) => {
         headline: "Your request fulfillment status changed",
         intro: `The storekeeper marked your equipment request as ${statusLabels[fulfillmentStatus]}.`,
         details: [
-          `Request ID: ${requestId}`,
           `Requested category: ${requestContext?.category_name || "Equipment request"}`,
           `Store note: ${note || "No extra note provided."}`,
         ],
@@ -12683,7 +12688,6 @@ app.post("/api/requests/:id/fulfill", async (req, res) => {
         headline: "Your equipment has been assigned",
         intro: "Your request has been fulfilled and the asset is now assigned to you.",
         details: [
-          `Request ID: ${requestId}`,
           `Category: ${requestContext?.category_name || "Equipment"}`,
           `Assigned asset: ${equipmentDetails?.asset_tag || "Assigned item"}`,
           `Equipment name: ${equipmentDetails?.equipment_name || "Equipment item"}`,
@@ -13004,7 +13008,7 @@ app.post("/api/returns/request", async (req, res) => {
       [assignment.branch_id, assignment.branch_id, assignment.branch_id],
     );
 
-    if (itManagerRows.length > 0) {
+    if (itManagerRows.length > 0 && normalizedReturnReason !== "leaving_job") {
       const itManager = itManagerRows[0];
       await createNotification(
         itManager.id,
@@ -13113,9 +13117,141 @@ app.post("/api/returns/request", async (req, res) => {
     return res.status(201).json({
       message:
         normalizedReturnReason === "leaving_job"
-          ? "Leaving-job return request submitted. HR Recruitment and IT Support have been notified."
+          ? "Leaving-job return request submitted. HR Recruitment has been notified and IT Support is pending HR notification."
           : "Return request submitted successfully.",
     });
+  } catch (error) {
+    return res.status(500).json({ message: normalizeError(error) });
+  }
+});
+
+app.post("/api/returns/:id/hr-notify-it", async (req, res) => {
+  const returnId = Number(req.params.id);
+  const { actorUserId } = req.body ?? {};
+
+  if (!returnId || !actorUserId) {
+    return res.status(400).json({ message: "Return and HR recruitment actor are required." });
+  }
+
+  try {
+    const actor = await getUserContext(Number(actorUserId));
+
+    if (!actor || !["HR Recruitment officer", "Hr department"].includes(actor.role_name)) {
+      return res.status(403).json({ message: "Only HR recruitment users can notify IT Support for this return." });
+    }
+
+    const actorFullName = [actor.first_name, actor.last_name].filter(Boolean).join(" ") || actor.email || "HR Recruitment";
+
+    const [returnRows] = await pool.query(
+      `
+        SELECT
+          r.id,
+          r.assignment_id,
+          r.equipment_id,
+          r.employee_user_id,
+          r.return_reason,
+          r.return_status,
+          r.request_note,
+          r.return_attachment_name,
+          r.hr_notified_it_at,
+          e.asset_tag,
+          e.equipment_name,
+          e.branch_id,
+          emp.email AS employee_email,
+          CONCAT(emp.first_name, ' ', emp.last_name) AS employee_name
+        FROM returns r
+        INNER JOIN equipment e ON e.id = r.equipment_id
+        INNER JOIN users emp ON emp.id = r.employee_user_id
+        WHERE r.id = ?
+        LIMIT 1
+      `,
+      [returnId],
+    );
+
+    if (returnRows.length === 0) {
+      return res.status(404).json({ message: "Return request not found." });
+    }
+
+    const returnRecord = returnRows[0];
+
+    if (returnRecord.return_reason !== "leaving_job") {
+      return res.status(400).json({ message: "HR notification to IT is only required for leaving-job returns." });
+    }
+
+    if (returnRecord.return_status !== "it_review") {
+      return res.status(400).json({ message: "Only pending IT review returns can be sent to IT Support." });
+    }
+
+    if (returnRecord.hr_notified_it_at) {
+      return res.status(400).json({ message: "IT Support has already been notified for this return." });
+    }
+
+    const [itManagerRows] = await pool.query(
+      `
+        SELECT u.id, u.email, CONCAT(u.first_name, ' ', u.last_name) AS full_name
+        FROM users u
+        INNER JOIN roles r ON r.id = u.role_id
+        WHERE r.name = 'IT Support engineer'
+          AND u.status = 'active'
+          AND (? IS NULL OR u.branch_id = ? OR u.branch_id IS NULL)
+        ORDER BY CASE WHEN u.branch_id = ? THEN 0 ELSE 1 END, u.id ASC
+        LIMIT 1
+      `,
+      [returnRecord.branch_id, returnRecord.branch_id, returnRecord.branch_id],
+    );
+
+    if (itManagerRows.length === 0) {
+      return res.status(404).json({ message: "No active IT Support engineer was found for this return." });
+    }
+
+    await pool.query(
+      `
+        UPDATE returns
+        SET hr_notified_it_at = NOW(), hr_notified_it_by = ?
+        WHERE id = ?
+      `,
+      [actor.id, returnId],
+    );
+
+    const itManager = itManagerRows[0];
+    await createNotification(
+      itManager.id,
+      "HR notified IT about an exit return",
+      `${actorFullName} asked IT Support to collect and inspect ${returnRecord.asset_tag} for ${returnRecord.employee_name}'s offboarding return.`,
+    );
+
+    if (itManager.email) {
+      await trySendRequestLifecycleEmail({
+        to: itManager.email,
+        subject: "Airtel IMS HR notification for exit return",
+        headline: "HR has sent an offboarding return to IT Support",
+        intro: `${actorFullName} has notified IT Support that ${returnRecord.employee_name}'s returned device is ready for collection and inspection.`,
+        details: [
+          `Return ID: ${returnId}`,
+          `Asset: ${returnRecord.asset_tag}`,
+          `Equipment: ${returnRecord.equipment_name}`,
+          `Employee: ${returnRecord.employee_name}`,
+          "Return reason: Employee leaving job",
+          `HR note: ${returnRecord.request_note || "No employee return note provided."}`,
+          `Attached document: ${returnRecord.return_attachment_name || "Available in Airtel IMS"}`,
+        ],
+        closing: "Please sign in to Airtel IMS, receive the device from HR, and complete the IT Support assessment.",
+      });
+    }
+
+    await logAssetLifecycle({
+      equipmentId: returnRecord.equipment_id,
+      actorUserId: actor.id,
+      eventType: "hr_notified_it_return",
+      eventLabel: "HR notified IT about return",
+      eventNote: `${actorFullName} sent the offboarding return to IT Support for collection and review.`,
+      fromStatus: "it_review",
+      toStatus: "it_review",
+      relatedRecordType: "return",
+      relatedRecordId: returnId,
+    });
+
+    return res.json({ message: "IT Support notified successfully." });
   } catch (error) {
     return res.status(500).json({ message: normalizeError(error) });
   }
@@ -13167,6 +13303,18 @@ app.post("/api/returns/:id/it-review", async (req, res) => {
 
     if (returnRecord.return_status !== "it_review") {
       return res.status(400).json({ message: "This return request is not waiting for IT review." });
+    }
+
+    if (returnRecord.return_reason === "leaving_job") {
+      const [notificationRows] = await pool.query(
+        "SELECT hr_notified_it_at FROM returns WHERE id = ? LIMIT 1",
+        [returnId],
+      );
+      const hrNotifiedItAt = notificationRows[0]?.hr_notified_it_at || null;
+
+      if (!hrNotifiedItAt) {
+        return res.status(400).json({ message: "HR Recruitment must notify IT Support before IT can process this leaving-job return." });
+      }
     }
 
     if (action === "reject") {

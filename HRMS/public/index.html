@@ -4,8 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#d71920" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Airtel HRMS" />
     <title>Airtel HRMS</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Roboto:wght@400;500;700;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -54,7 +60,6 @@
           <div class="auth-form-header">
             <p class="eyebrow">Sign In</p>
             <h3>Welcome back</h3>
-            <p>Use your IMS credentials to open the HRMS workspace.</p>
           </div>
 
           <form class="login-form" id="login-form">
@@ -71,22 +76,9 @@
               </div>
             </label>
 
-            <div class="auth-inline-row">
-              <span class="auth-inline-note">Single sign-on ready for HRMS and IMS.</span>
-              <span class="auth-inline-link">Password help from IMS</span>
-            </div>
-
             <button class="primary-btn submit-btn auth-login-btn" type="submit">Login</button>
-            <p class="status-text" id="login-hint">Access is limited to the HR Recruitment Officer.</p>
+            <p class="status-text hidden" id="login-hint" aria-live="polite"></p>
           </form>
-
-          <div class="login-help-card">
-            <p class="eyebrow">Workspace</p>
-            <ul class="plain-list">
-              <li>HR manages employee source records in HRMS.</li>
-              <li>IMS consumes employee information through API in read-only mode.</li>
-            </ul>
-          </div>
         </section>
       </div>
     </div>
@@ -99,11 +91,6 @@
           <div class="logo-lockup">
             <img class="logo-image" src="/airtel-logo.png" alt="Airtel" />
           </div>
-        </div>
-
-        <div class="sidebar-user">
-          <strong id="sidebar-actor-name">User</strong>
-          <span id="sidebar-actor-role">role</span>
         </div>
 
         <nav class="sidebar-nav">
@@ -124,14 +111,25 @@
                 <span class="sidebar-link-icon" data-icon="users"></span>
                 <span class="sidebar-link-label">Users</span>
               </button>
-              <button class="sidebar-link sidebar-link-button" data-section-target="inspector" type="button">
-                <span class="sidebar-link-icon" data-icon="search"></span>
-                <span class="sidebar-link-label">Inspector</span>
-              </button>
-              <a class="sidebar-link" href="http://127.0.0.1:5173/hrms#returns" target="_blank" rel="noreferrer">
+              <a class="sidebar-link" href="http://localhost:5173/" rel="noreferrer">
                 <span class="sidebar-link-icon" data-icon="approvals"></span>
                 <span class="sidebar-link-label">Returns (IMS)</span>
               </a>
+            </div>
+          </section>
+          <section class="sidebar-group">
+            <button class="sidebar-group-button" id="group-management-toggle" type="button" aria-expanded="true">
+              <span class="sidebar-group-title">
+                <span class="sidebar-icon" data-icon="settings"></span>
+                <span>Settings</span>
+              </span>
+              <span class="sidebar-chevron is-open" id="group-management-chevron">&#8964;</span>
+            </button>
+            <div class="sidebar-group-links is-open" id="group-management-links">
+              <button class="sidebar-link sidebar-link-button" data-section-target="settings" type="button">
+                <span class="sidebar-link-icon" data-icon="profile"></span>
+                <span class="sidebar-link-label">Settings</span>
+              </button>
             </div>
           </section>
 
@@ -146,11 +144,19 @@
           </div>
           <div class="dashboard-topbar-right">
             <div class="user-menu-shell">
-              <button class="user-menu-trigger" id="user-menu-trigger" type="button" aria-label="User menu">
+              <button class="user-menu-trigger" id="user-menu-trigger" type="button" aria-label="User menu" aria-haspopup="menu" aria-expanded="false">
                 <span class="user-avatar" id="masthead-avatar">HR</span>
+                <span class="user-menu-chevron" aria-hidden="true">&#8964;</span>
               </button>
               <div class="user-menu-dropdown hidden" id="user-menu-dropdown" role="menu" aria-label="User menu">
-                <button class="user-menu-item" id="user-menu-logout" type="button" role="menuitem">Logout</button>
+                <button class="user-menu-item" id="user-menu-profile" type="button" role="menuitem">
+                  <span class="btn-icon" data-inline-icon="profile"></span>
+                  <span>Profile</span>
+                </button>
+                <button class="user-menu-item" id="user-menu-logout" type="button" role="menuitem">
+                  <span class="btn-icon" data-inline-icon="logout"></span>
+                  <span>Logout</span>
+                </button>
               </div>
             </div>
           </div>
@@ -201,10 +207,18 @@
               <section class="dashboard-panel">
                 <div class="panel-header">
                   <div>
-                    <p class="eyebrow">Employee Directory</p>
                     <h3>Employee directory</h3>
                   </div>
-                  <button class="secondary-btn compact-btn" id="refresh-dashboard" type="button">Refresh</button>
+                  <div class="panel-header-actions">
+                    <button class="secondary-btn compact-btn action-btn action-btn--create" id="create-employee" type="button">
+                      <span class="btn-icon" data-inline-icon="add"></span>
+                      <span class="btn-label">Add employee</span>
+                    </button>
+                    <button class="secondary-btn compact-btn action-btn action-btn--refresh" id="refresh-dashboard" type="button">
+                      <span class="btn-icon" data-inline-icon="refresh"></span>
+                      <span class="btn-label">Refresh</span>
+                    </button>
+                  </div>
                 </div>
 
                 <div class="panel-toolbar">
@@ -219,110 +233,146 @@
 
                 <div class="directory-summary">
                   <span class="directory-pill" id="directory-count-pill">0 employees loaded</span>
-                  <span class="directory-pill directory-pill-muted">Select an employee to inspect device fit</span>
                 </div>
-
-                <p class="status-text" id="directory-hint">Select an employee to inspect details and device fit.</p>
-                <div class="employee-list" id="employee-list"></div>
+                <div class="employee-table-shell">
+                  <table class="employee-table">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>IMS role</th>
+                        <th>Department</th>
+                        <th>Status</th>
+                        <th>IMS</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody id="employee-list"></tbody>
+                  </table>
+                </div>
+                <div class="table-pagination" id="employee-pagination">
+                  <button class="secondary-btn compact-btn action-btn action-btn--refresh" id="employee-page-prev" type="button">
+                    <span class="btn-label">Previous</span>
+                  </button>
+                  <span class="table-pagination-status" id="employee-page-status">Page 1 of 1</span>
+                  <button class="secondary-btn compact-btn action-btn action-btn--refresh" id="employee-page-next" type="button">
+                    <span class="btn-label">Next</span>
+                  </button>
+                </div>
               </section>
             </section>
 
-            <section class="section-view hidden" id="section-inspector">
-              <section class="dashboard-panel inspector-panel">
+            <section class="section-view hidden" id="section-settings">
+              <section class="dashboard-panel" id="settings">
                 <div class="panel-header">
-                  <div>
-                    <p class="eyebrow">Employee Inspector</p>
-                    <h3>Employee profile and device fit</h3>
-                  </div>
+                  <h3>Account Settings</h3>
+                  <span>Update your profile and sign-in credentials</span>
                 </div>
 
-                <div class="inspector-empty" id="employee-inspector-empty">
-                  <strong>Select an employee</strong>
-                  <p>Inspect employee details and the recommended device profile.</p>
-                </div>
-
-                <div class="inspector-content hidden" id="employee-inspector">
-                  <div class="inspector-hero">
-                    <div>
-                      <h3 id="inspector-name">Employee Name</h3>
-                      <p id="inspector-subtitle">Role and contact</p>
+                <div class="settings-grid">
+                  <article class="settings-card">
+                    <div class="subpanel-header">
+                      <h4>Profile Details</h4>
                     </div>
-                    <span class="role-chip" id="inspector-status">Active</span>
-                  </div>
+                    <form class="simple-form settings-form settings-profile-form" id="settings-profile-form">
+                      <div class="settings-profile-hero-block">
+                        <div class="settings-profile-hero">
+                          <div class="settings-profile-hero-avatar settings-profile-hero-avatar-fallback" id="settings-profile-avatar" aria-hidden="true">HR</div>
+                          <div class="settings-profile-hero-copy">
+                            <strong id="settings-profile-name">HR User</strong>
+                            <span id="settings-profile-email-preview">No email</span>
+                            <small id="settings-profile-role">HR RECRUITMENT OFFICER</small>
+                          </div>
+                        </div>
+                      </div>
 
-                  <div class="detail-grid" id="inspector-details"></div>
+                      <label class="field settings-field-half">
+                        <span>First name</span>
+                        <input id="settings-first-name" name="firstName" required />
+                      </label>
+                      <label class="field settings-field-half">
+                        <span>Last name</span>
+                        <input id="settings-last-name" name="lastName" required />
+                      </label>
+                      <label class="field settings-field-full">
+                        <span>Email</span>
+                        <input id="settings-email" name="email" type="email" required />
+                      </label>
+                      <label class="field settings-field-full">
+                        <span>Phone number</span>
+                        <input id="settings-phone-number" name="phoneNumber" type="tel" placeholder="0721234567 or +250721234567" />
+                      </label>
+                      <p class="form-message success-text hidden" id="settings-profile-success"></p>
+                      <p class="form-message error-text hidden" id="settings-profile-error"></p>
+                      <button class="primary-btn settings-action-btn settings-submit-btn settings-submit-row" type="submit" id="settings-profile-submit">
+                        <span class="btn-icon" data-inline-icon="save"></span>
+                        <span class="btn-label">Save profile</span>
+                      </button>
+                    </form>
+                  </article>
 
-                  <div class="recommendation-card">
-                    <p class="eyebrow">Recommended Device</p>
-                    <h4 id="inspector-device">Standard office laptop</h4>
-                    <p id="inspector-reason">Recommendation reason.</p>
-                  </div>
+                  <article class="settings-card">
+                    <div class="subpanel-header">
+                      <h4>Security</h4>
+                    </div>
+                    <form class="simple-form settings-form settings-security-form" id="settings-password-form">
+                      <label class="field settings-field-half">
+                        <span>Current password</span>
+                        <input id="settings-current-password" name="currentPassword" type="password" required />
+                      </label>
+                      <label class="field settings-field-half">
+                        <span>New password</span>
+                        <input id="settings-new-password" name="newPassword" type="password" minlength="6" required />
+                      </label>
+                      <label class="field settings-field-full">
+                        <span>Confirm password</span>
+                        <input id="settings-confirm-password" name="confirmPassword" type="password" minlength="6" required />
+                      </label>
+                      <p class="form-message success-text hidden" id="settings-password-success"></p>
+                      <p class="form-message error-text hidden" id="settings-password-error"></p>
+                      <button class="primary-btn settings-action-btn settings-submit-btn settings-submit-row" type="submit" id="settings-password-submit">
+                        <span class="btn-icon" data-inline-icon="save"></span>
+                        <span class="btn-label">Change password</span>
+                      </button>
+                    </form>
+                  </article>
 
-                  <div class="action-note-card">
-                    <p class="eyebrow">Next Step</p>
-                    <p id="inspector-next-step">Use this employee context in IMS.</p>
-                  </div>
+                  <article class="settings-card settings-summary-card">
+                    <div class="subpanel-header">
+                      <h4>Account Summary</h4>
+                    </div>
+                    <div class="settings-profile-hero">
+                      <div class="settings-profile-hero-avatar settings-profile-hero-avatar-fallback" id="settings-summary-avatar" aria-hidden="true">HR</div>
+                      <div class="settings-profile-hero-copy">
+                        <strong id="settings-summary-name">HR User</strong>
+                        <span id="settings-summary-email">No email</span>
+                        <small id="settings-summary-role">HR RECRUITMENT OFFICER</small>
+                      </div>
+                    </div>
+                    <div class="mini-list settings-summary-list">
+                      <div class="mini-list-card">
+                        <strong>Status</strong>
+                        <span id="settings-summary-status">ACTIVE</span>
+                      </div>
+                      <div class="mini-list-card">
+                        <strong>Phone</strong>
+                        <span id="settings-summary-phone">Not assigned</span>
+                      </div>
+                      <div class="mini-list-card">
+                        <strong>Department</strong>
+                        <span id="settings-summary-department">Not assigned</span>
+                      </div>
+                      <div class="mini-list-card">
+                        <strong>Job title</strong>
+                        <span id="settings-summary-job">Not assigned</span>
+                      </div>
+                    </div>
+                  </article>
                 </div>
               </section>
             </section>
 
-            <section class="section-view hidden" id="section-register">
-              <section class="dashboard-panel" id="register-panel">
-                <div class="panel-header" id="register">
-                  <div>
-                    <p class="eyebrow">Recruitment Action</p>
-                    <h3 id="employee-form-title">Edit employee</h3>
-                  </div>
-                  <button class="secondary-btn compact-btn hidden" id="cancel-edit" type="button">Cancel edit</button>
-                </div>
-
-                <div class="register-layout">
-                  <form class="employee-form" id="employee-form">
-                    <div class="field-grid">
-                      <label class="field"><span>First name</span><input name="firstName" maxlength="40" required /></label>
-                      <label class="field"><span>Last name</span><input name="lastName" maxlength="40" required /></label>
-                      <label class="field"><span>Email</span><input name="email" type="email" required /></label>
-                      <label class="field"><span>Phone number</span><input name="phoneNumber" maxlength="13" /></label>
-                      <label class="field">
-                        <span>Employee code</span>
-                        <input name="employeeCode" maxlength="40" readonly placeholder="Auto-generated when saved" />
-                      </label>
-                      <label class="field">
-                        <span>HRMS employee ID</span>
-                        <input name="hrmsEmployeeId" maxlength="40" readonly placeholder="Auto-generated when saved" />
-                      </label>
-                      <label class="field"><span>Job title</span><input name="jobTitle" maxlength="120" /></label>
-                      <label class="field"><span>HRMS account status</span>
-                        <select name="status">
-                          <option value="active">Active</option>
-                          <option value="pending">Pending</option>
-                          <option value="inactive">Inactive</option>
-                        </select>
-                        <span class="field-note">Account status controls whether the HRMS record is active in the system.</span>
-                      </label>
-                      <label class="field"><span>Office location</span><input name="officeLocation" maxlength="180" /></label>
-                      <label class="field"><span>Department name</span><input name="departmentName" maxlength="40" /></label>
-                      <label class="field"><span>Start date</span><input name="startDate" type="date" /></label>
-                    </div>
-
-                    <div class="form-actions">
-                      <button class="primary-btn" type="submit" id="employee-submit">Save employee</button>
-                    </div>
-                    <p class="status-text" id="employee-message">Select an existing employee to update HRMS source records.</p>
-                  </form>
-
-                  <aside class="register-help-card">
-                    <p class="eyebrow">Checklist</p>
-                    <ul class="plain-list">
-                      <li>Register the employee in HRMS first.</li>
-                      <li>Keep job title and department accurate.</li>
-                      <li>Use HRMS account status for system activation and login state.</li>
-                      <li>Use employment status for the employee's HR/work state.</li>
-                    </ul>
-                  </aside>
-                </div>
-              </section>
-            </section>
+            <section class="section-view hidden" id="section-register"></section>
           </div>
         </main>
 
@@ -330,6 +380,91 @@
           <p>Copyright 2026 Airtel HRMS. All rights reserved.</p>
           <span>Version 1.0.0</span>
         </footer>
+      </div>
+    </div>
+
+    <div class="modal-overlay hidden" id="employee-modal-overlay" role="presentation">
+      <div class="modal-card employee-modal-card" role="dialog" aria-modal="true" aria-labelledby="employee-form-title">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Recruitment Action</p>
+            <h3 id="employee-form-title">Add employee</h3>
+          </div>
+          <button class="secondary-btn compact-btn" id="cancel-edit" type="button">Close</button>
+        </div>
+
+        <div class="register-layout">
+          <form class="employee-form" id="employee-form">
+            <section class="form-section">
+              <div class="form-section-header">
+                <p class="eyebrow">Identity</p>
+                <h4>Employee details</h4>
+              </div>
+              <div class="field-grid">
+                <label class="field"><span>First name</span><input name="firstName" maxlength="40" required /></label>
+                <label class="field"><span>Last name</span><input name="lastName" maxlength="40" required /></label>
+                <label class="field field--full"><span>Email</span><input name="email" type="email" inputmode="email" autocomplete="email" required /></label>
+                <label class="field"><span>Phone number</span><input name="phoneNumber" maxlength="13" /></label>
+                <label class="field"><span>Job title</span><input name="jobTitle" maxlength="120" /></label>
+                <label class="field"><span>Department name</span><input name="departmentName" maxlength="40" /></label>
+                <label class="field"><span>Office location</span><input name="officeLocation" maxlength="180" /></label>
+                <label class="field"><span>Start date</span><input name="startDate" type="date" /></label>
+              </div>
+            </section>
+
+            <section class="form-section">
+              <div class="form-section-header">
+                <p class="eyebrow">Access</p>
+                <h4>System setup</h4>
+              </div>
+              <div class="field-grid">
+                <label class="field"><span>IMS role</span>
+                  <select name="roleId" id="employee-role-select" required>
+                    <option value="">Loading roles...</option>
+                  </select>
+                </label>
+                <div class="field">
+                  <span>HRMS account status</span>
+                  <div class="status-display-pill" id="employee-status-display">Active</div>
+                  <input name="status" type="hidden" value="active" />
+                </div>
+                <label class="field">
+                  <span>Employee code</span>
+                  <input name="employeeCode" maxlength="40" readonly placeholder="Auto-generated" />
+                </label>
+                <label class="field">
+                  <span>HRMS employee ID</span>
+                  <input name="hrmsEmployeeId" maxlength="40" readonly placeholder="Auto-generated" />
+                </label>
+              </div>
+            </section>
+
+            <div class="form-actions modal-form-actions">
+              <button class="secondary-btn action-btn action-btn--cancel" type="button" data-close-employee-modal>
+                <span class="btn-icon" data-inline-icon="close"></span>
+                <span class="btn-label">Cancel</span>
+              </button>
+              <button class="primary-btn action-btn action-btn--save" type="submit" id="employee-submit">
+                <span class="btn-icon" data-inline-icon="save"></span>
+                <span class="btn-label">Save employee</span>
+              </button>
+            </div>
+            <p class="status-text modal-status-text" id="employee-message"></p>
+            <div class="credentials-panel hidden" id="employee-credentials-panel">
+              <p class="eyebrow">Employee Credentials</p>
+              <div class="credentials-grid">
+                <label class="field">
+                  <span>Login email</span>
+                  <input id="employee-credentials-email" type="text" readonly />
+                </label>
+                <label class="field">
+                  <span>Temporary password</span>
+                  <input id="employee-credentials-password" type="text" readonly />
+                </label>
+              </div>
+            </div>
+          </form>
+        </div>
       </div>
     </div>
 

@@ -1,4 +1,7 @@
 const SESSION_STORAGE_KEY = "airtel_hrms_session";
+const SESSION_ACTIVITY_KEY = "airtel_hrms_last_activity";
+const INACTIVITY_LIMIT_MS = 5 * 60 * 1000;
+const WARNING_WINDOW_MS = 60 * 1000;
 
 const authShell = document.querySelector("#auth-shell");
 const dashboardShell = document.querySelector("#dashboard-shell");
@@ -15,9 +18,20 @@ const employeeList = document.querySelector("#employee-list");
 const employeeSearch = document.querySelector("#employee-search");
 const employeeFilter = document.querySelector("#employee-filter");
 const refreshButton = document.querySelector("#refresh-dashboard");
+const createEmployeeButton = document.querySelector("#create-employee");
+const employeePagePrevButton = document.querySelector("#employee-page-prev");
+const employeePageNextButton = document.querySelector("#employee-page-next");
+const employeePageStatus = document.querySelector("#employee-page-status");
 const cancelEditButton = document.querySelector("#cancel-edit");
+const employeeModalCloseButtons = Array.from(document.querySelectorAll("[data-close-employee-modal]"));
 const employeeFormTitle = document.querySelector("#employee-form-title");
 const employeeMessage = document.querySelector("#employee-message");
+const employeeStatusDisplay = document.querySelector("#employee-status-display");
+const employeeCredentialsPanel = document.querySelector("#employee-credentials-panel");
+const employeeCredentialsEmail = document.querySelector("#employee-credentials-email");
+const employeeCredentialsPassword = document.querySelector("#employee-credentials-password");
+const employeeRoleSelect = document.querySelector("#employee-role-select");
+const employeeModalOverlay = document.querySelector("#employee-modal-overlay");
 const topbarTitle = document.querySelector("#topbar-title");
 const actorName = document.querySelector("#sidebar-actor-name");
 const actorRole = document.querySelector("#sidebar-actor-role");
@@ -27,19 +41,35 @@ const overviewCopy = document.querySelector("#overview-copy");
 const mastheadAvatar = document.querySelector("#masthead-avatar");
 const userMenuTrigger = document.querySelector("#user-menu-trigger");
 const userMenuDropdown = document.querySelector("#user-menu-dropdown");
+const userMenuProfile = document.querySelector("#user-menu-profile");
 const userMenuLogout = document.querySelector("#user-menu-logout");
 const profilePanel = document.querySelector("#profile-panel");
 const profilePanelClose = document.querySelector("#profile-panel-close");
 const profilePanelContent = document.querySelector("#profile-panel-content");
-const inspectorEmpty = document.querySelector("#employee-inspector-empty");
-const inspectorContent = document.querySelector("#employee-inspector");
-const inspectorName = document.querySelector("#inspector-name");
-const inspectorSubtitle = document.querySelector("#inspector-subtitle");
-const inspectorStatus = document.querySelector("#inspector-status");
-const inspectorDetails = document.querySelector("#inspector-details");
-const inspectorDevice = document.querySelector("#inspector-device");
-const inspectorReason = document.querySelector("#inspector-reason");
-const inspectorNextStep = document.querySelector("#inspector-next-step");
+const settingsProfileForm = document.querySelector("#settings-profile-form");
+const settingsPasswordForm = document.querySelector("#settings-password-form");
+const settingsFirstName = document.querySelector("#settings-first-name");
+const settingsLastName = document.querySelector("#settings-last-name");
+const settingsEmail = document.querySelector("#settings-email");
+const settingsPhoneNumber = document.querySelector("#settings-phone-number");
+const settingsProfileAvatar = document.querySelector("#settings-profile-avatar");
+const settingsSummaryAvatar = document.querySelector("#settings-summary-avatar");
+const settingsProfileName = document.querySelector("#settings-profile-name");
+const settingsProfileEmailPreview = document.querySelector("#settings-profile-email-preview");
+const settingsProfileRole = document.querySelector("#settings-profile-role");
+const settingsSummaryName = document.querySelector("#settings-summary-name");
+const settingsSummaryEmail = document.querySelector("#settings-summary-email");
+const settingsSummaryRole = document.querySelector("#settings-summary-role");
+const settingsSummaryStatus = document.querySelector("#settings-summary-status");
+const settingsSummaryPhone = document.querySelector("#settings-summary-phone");
+const settingsSummaryDepartment = document.querySelector("#settings-summary-department");
+const settingsSummaryJob = document.querySelector("#settings-summary-job");
+const settingsProfileSuccess = document.querySelector("#settings-profile-success");
+const settingsProfileError = document.querySelector("#settings-profile-error");
+const settingsPasswordSuccess = document.querySelector("#settings-password-success");
+const settingsPasswordError = document.querySelector("#settings-password-error");
+const settingsProfileSubmit = document.querySelector("#settings-profile-submit");
+const settingsPasswordSubmit = document.querySelector("#settings-password-submit");
 const directoryCountPill = document.querySelector("#directory-count-pill");
 const overviewGrid = document.querySelector("#overview-grid");
 const overviewInsights = document.querySelector("#overview-insights");
@@ -47,7 +77,7 @@ const sectionButtons = Array.from(document.querySelectorAll("[data-section-targe
 const sectionViews = {
   overview: document.querySelector("#section-overview"),
   directory: document.querySelector("#section-directory"),
-  inspector: document.querySelector("#section-inspector"),
+  settings: document.querySelector("#section-settings"),
   register: document.querySelector("#section-register"),
 };
 
@@ -61,7 +91,7 @@ const managementGroupChevron = document.querySelector("#group-management-chevron
 const sectionGroupMap = {
   overview: "workspace",
   directory: "workspace",
-  inspector: "workspace",
+  settings: "management",
   register: "management",
 };
 
@@ -82,14 +112,22 @@ const state = {
   actor: null,
   token: "",
   employees: [],
+  employeePage: 1,
+  employeesPerPage: 8,
   editingEmployeeId: null,
   selectedEmployeeId: null,
   lastStats: null,
   recentEmployees: [],
   activeSection: "overview",
+  roleOptions: [],
 };
 
 let isSidebarCollapsed = false;
+let inactivityTimeoutId = null;
+let warningTimeoutId = null;
+let warningIntervalId = null;
+let sessionWarningOverlay = null;
+let sessionCountdownValue = null;
 
 const sectionMeta = {
   overview: {
@@ -100,19 +138,19 @@ const sectionMeta = {
   },
   directory: {
     title: "Users",
-    subtitleHr: "Review employee records available for HRMS and IMS processing.",
-    subtitleIt: "Search registered employees and confirm their current profile details.",
+    subtitleHr: "",
+    subtitleIt: "",
     breadcrumb: "Users",
   },
-  inspector: {
-    title: "Employee Inspector",
-    subtitleHr: "Inspect employee profiles, IMS readiness, and recommended device fit before handoff.",
-    subtitleIt: "Inspect the employee profile and recommendation before using IMS.",
-    breadcrumb: "Inspector",
+  settings: {
+    title: "Settings",
+    subtitleHr: "Update your profile and sign-in credentials.",
+    subtitleIt: "Update your profile and sign-in credentials.",
+    breadcrumb: "Settings",
   },
   register: {
     title: "Employee Settings",
-    subtitleHr: "Edit employee records that will be used by IMS.",
+    subtitleHr: "Create employees, assign IMS roles, and manage the records HRMS publishes to IMS.",
     subtitleIt: "This section is limited to HR Recruitment Officer access.",
     breadcrumb: "Employee Settings",
   },
@@ -120,27 +158,35 @@ const sectionMeta = {
 
 const iconMap = {
   dashboard:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 13h8V3H3z"/><path d="M13 21h8v-6h-8z"/><path d="M13 3h8v8h-8z"/><path d="M3 21h8v-4H3z"/></svg>',
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h8V3H3z"/><path d="M13 21h8v-6h-8z"/><path d="M13 3h8v8h-8z"/><path d="M3 21h8v-4H3z"/></svg>',
   users:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  employeeTotal:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8"/><path d="M8 11h8"/><path d="M8 15h5"/></svg>',
   search:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>',
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6"/><path d="M8 11h6"/></svg>',
   plus:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14"/><path d="M5 12h14"/></svg>',
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M12 8v8"/><path d="M8 12h8"/></svg>',
   settings:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a2 2 0 0 1 2 2v1.1a7.9 7.9 0 0 1 1.9.8l.8-.8a2 2 0 1 1 2.8 2.8l-.8.8a7.9 7.9 0 0 1 .8 1.9H21a2 2 0 1 1 0 4h-1.1a7.9 7.9 0 0 1-.8 1.9l.8.8a2 2 0 1 1-2.8 2.8l-.8-.8a7.9 7.9 0 0 1-1.9.8V21a2 2 0 1 1-4 0v-1.1a7.9 7.9 0 0 1-1.9-.8l-.8.8a2 2 0 1 1-2.8-2.8l.8-.8a7.9 7.9 0 0 1-.8-1.9H3a2 2 0 1 1 0-4h1.1a7.9 7.9 0 0 1 .8-1.9l-.8-.8A2 2 0 1 1 6.9 5.4l.8.8a7.9 7.9 0 0 1 1.9-.8V5a2 2 0 0 1 2-2Z"/><circle cx="12" cy="12" r="3"/></svg>',
-  total:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>',
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a2 2 0 0 1 2 2v1.1a7.9 7.9 0 0 1 1.9.8l.8-.8a2 2 0 1 1 2.8 2.8l-.8.8a7.9 7.9 0 0 1 .8 1.9H21a2 2 0 1 1 0 4h-1.1a7.9 7.9 0 0 1-.8 1.9l.8.8a2 2 0 1 1-2.8 2.8l-.8-.8a7.9 7.9 0 0 1-1.9.8V21a2 2 0 1 1-4 0v-1.1a7.9 7.9 0 0 1-1.9-.8l-.8.8a2 2 0 1 1-2.8-2.8l.8-.8a7.9 7.9 0 0 1-.8-1.9H3a2 2 0 1 1 0-4h1.1a7.9 7.9 0 0 1 .8-1.9l-.8-.8A2 2 0 1 1 6.9 5.4l.8.8a7.9 7.9 0 0 1 1.9-.8V5a2 2 0 0 1 2-2Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  profile:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="8" r="4"/></svg>',
+  inactive:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6"/><path d="m15 9-6 6"/></svg>',
   active:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 12 2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>',
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="m9 12 2 2 4-4"/></svg>',
   pending:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>',
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5"/><path d="M12 16h.01"/></svg>',
+  imsLinked:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l2.92-2.92a5 5 0 0 0-7.07-7.07L11.5 5.4"/><path d="M14 11a5 5 0 0 0-7.54-.54L3.54 13.4a5 5 0 0 0 7.07 7.07l1.88-1.88"/></svg>',
+  departmentCluster:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M6 21V8h12v13"/><path d="M9 12h.01"/><path d="M12 12h.01"/><path d="M15 12h.01"/><path d="M9 16h.01"/><path d="M12 16h.01"/><path d="M15 16h.01"/><path d="M9 4h6v4H9z"/></svg>',
   linked:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
   departments:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/></svg>',
   approvals:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10Zm-1-6l-3.5-3.5 1.42-1.42L11 13.17l4.58-4.58 1.42 1.42L11 16Z"/></svg>',
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9c1.93 0 3.72.61 5.18 1.65"/><path d="M16 5h5v5"/></svg>',
   seen:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12Zm11 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/></svg>',
   requests:
@@ -217,6 +263,9 @@ function clearSession() {
   state.editingEmployeeId = null;
   state.selectedEmployeeId = null;
   window.localStorage.removeItem(SESSION_STORAGE_KEY);
+  window.sessionStorage.removeItem(SESSION_ACTIVITY_KEY);
+  stopSessionTimers();
+  hideSessionWarning();
 }
 
 async function closeHrmsSession() {
@@ -236,14 +285,20 @@ async function closeHrmsSession() {
 
 function openUserMenu() {
   userMenuDropdown.classList.remove("hidden");
+  userMenuTrigger?.setAttribute("aria-expanded", "true");
 }
 
 function closeUserMenu() {
   userMenuDropdown.classList.add("hidden");
+  userMenuTrigger?.setAttribute("aria-expanded", "false");
 }
 
 function toggleUserMenu() {
-  userMenuDropdown.classList.toggle("hidden");
+  if (userMenuDropdown.classList.contains("hidden")) {
+    openUserMenu();
+    return;
+  }
+  closeUserMenu();
 }
 
 function openProfilePanel(profile) {
@@ -269,6 +324,11 @@ function closeProfilePanel() {
   profilePanel.classList.add("hidden");
 }
 
+function openActorProfile() {
+  closeProfilePanel();
+  setActiveSection("settings");
+}
+
 function getInitials(firstName, lastName) {
   return [firstName, lastName]
     .filter(Boolean)
@@ -278,13 +338,165 @@ function getInitials(firstName, lastName) {
 }
 
 function setMessage(target, message, isError = false) {
+  if (!target) {
+    return;
+  }
+
   target.textContent = message;
   target.style.color = isError ? "#b1131a" : "#587287";
+  target.classList.toggle("hidden", !message);
+  target.classList.toggle("is-visible", Boolean(message));
+}
+
+function ensureSessionWarningOverlay() {
+  if (sessionWarningOverlay) {
+    return sessionWarningOverlay;
+  }
+
+  const overlay = document.createElement("div");
+  overlay.className = "session-warning-overlay hidden";
+  overlay.innerHTML = `
+    <div class="session-warning-card" role="alertdialog" aria-labelledby="session-warning-title" aria-modal="true">
+      <p class="session-warning-kicker">Session warning</p>
+      <h2 id="session-warning-title">You will be logged out soon</h2>
+      <p>No activity has been detected. Your session will expire in <strong id="session-warning-countdown">60</strong> seconds.</p>
+      <div class="session-warning-actions">
+        <button class="primary-btn compact-btn" type="button" data-session-action="continue">Continue session</button>
+        <button class="secondary-btn compact-btn" type="button" data-session-action="logout">Logout now</button>
+      </div>
+    </div>
+  `;
+
+  overlay.addEventListener("click", (event) => {
+    const action = event.target.closest("[data-session-action]")?.getAttribute("data-session-action");
+    if (action === "continue") {
+      handleContinueSession();
+    }
+    if (action === "logout") {
+      void handleLogout();
+    }
+  });
+
+  document.body.appendChild(overlay);
+  sessionWarningOverlay = overlay;
+  sessionCountdownValue = overlay.querySelector("#session-warning-countdown");
+  return overlay;
+}
+
+function hideSessionWarning() {
+  const overlay = ensureSessionWarningOverlay();
+  overlay.classList.add("hidden");
+}
+
+function showSessionWarning(secondsRemaining) {
+  const overlay = ensureSessionWarningOverlay();
+  if (sessionCountdownValue) {
+    sessionCountdownValue.textContent = String(Math.max(secondsRemaining, 1));
+  }
+  overlay.classList.remove("hidden");
+}
+
+function stopSessionTimers() {
+  if (inactivityTimeoutId) {
+    window.clearTimeout(inactivityTimeoutId);
+    inactivityTimeoutId = null;
+  }
+
+  if (warningTimeoutId) {
+    window.clearTimeout(warningTimeoutId);
+    warningTimeoutId = null;
+  }
+
+  if (warningIntervalId) {
+    window.clearInterval(warningIntervalId);
+    warningIntervalId = null;
+  }
+}
+
+function touchSessionActivity() {
+  if (!state.actor || !state.token) {
+    return;
+  }
+
+  window.sessionStorage.setItem(SESSION_ACTIVITY_KEY, String(Date.now()));
+}
+
+async function handleLogout() {
+  await closeHrmsSession();
+  clearSession();
+  resetEmployeeForm();
+  closeProfilePanel();
+  showAuthView();
+}
+
+function startSessionMonitoring() {
+  stopSessionTimers();
+  hideSessionWarning();
+
+  if (!state.actor || !state.token) {
+    return;
+  }
+
+  const currentActivity = Number(window.sessionStorage.getItem(SESSION_ACTIVITY_KEY) || Date.now());
+  const timeRemaining = Math.max(INACTIVITY_LIMIT_MS - (Date.now() - currentActivity), 0);
+
+  const beginWarningCountdown = () => {
+    hideSessionWarning();
+
+    const updateCountdown = () => {
+      const lastActivity = Number(window.sessionStorage.getItem(SESSION_ACTIVITY_KEY) || Date.now());
+      const secondsRemaining = Math.max(Math.ceil((INACTIVITY_LIMIT_MS - (Date.now() - lastActivity)) / 1000), 0);
+      showSessionWarning(secondsRemaining);
+    };
+
+    updateCountdown();
+    warningIntervalId = window.setInterval(updateCountdown, 1000);
+  };
+
+  if (timeRemaining <= WARNING_WINDOW_MS) {
+    beginWarningCountdown();
+  } else {
+    warningTimeoutId = window.setTimeout(beginWarningCountdown, timeRemaining - WARNING_WINDOW_MS);
+  }
+
+  inactivityTimeoutId = window.setTimeout(() => {
+    void handleLogout();
+  }, timeRemaining);
+}
+
+function handleActivity() {
+  if (!state.actor || !state.token) {
+    return;
+  }
+
+  hideSessionWarning();
+  touchSessionActivity();
+  startSessionMonitoring();
+}
+
+function handleContinueSession() {
+  touchSessionActivity();
+  hideSessionWarning();
+  startSessionMonitoring();
+}
+
+function setInlineMessage(target, message, kind = "") {
+  if (!target) {
+    return;
+  }
+
+  target.textContent = message || "";
+  target.classList.toggle("hidden", !message);
+  target.classList.toggle("success-text", kind === "success");
+  target.classList.toggle("error-text", kind === "error");
 }
 
 function applyIcons() {
   document.querySelectorAll("[data-icon]").forEach((node) => {
     node.innerHTML = iconMap[node.getAttribute("data-icon")] || "";
+  });
+  document.querySelectorAll("[data-inline-icon]").forEach((node) => {
+    node.innerHTML = getActionIcon(node.getAttribute("data-inline-icon")) || "";
   });
 }
 
@@ -312,6 +524,10 @@ function setSidebarCollapsed(collapsed) {
 }
 
 function toggleGroup(linksNode, chevronNode, expanded) {
+  if (!linksNode || !chevronNode) {
+    return;
+  }
+
   linksNode.classList.toggle("is-open", expanded);
   linksNode.classList.toggle("is-closed", !expanded);
   chevronNode.classList.toggle("is-open", expanded);
@@ -319,7 +535,7 @@ function toggleGroup(linksNode, chevronNode, expanded) {
 
 function setGroupState(groupName, expanded) {
   const group = groupControls[groupName];
-  if (!group) {
+  if (!group?.toggle || !group?.links || !group?.chevron) {
     return;
   }
 
@@ -347,9 +563,109 @@ function updateSectionMeta() {
   } else {
     topbarTitle.textContent = meta.title;
   }
-  overviewCopy.textContent = isItRole() ? meta.subtitleIt : meta.subtitleHr;
+  overviewCopy.textContent = state.activeSection === "overview" ? "" : isItRole() ? meta.subtitleIt : meta.subtitleHr;
   dashboardChipLabel.textContent = isItRole() ? "IT Support" : "HR Recruitment Officer";
   dashboardBreadcrumbCurrent.textContent = meta.breadcrumb;
+}
+
+function renderRoleOptions(selectedRoleId = "") {
+  if (!employeeRoleSelect) {
+    return;
+  }
+
+  const options = state.roleOptions.length > 0
+    ? state.roleOptions
+        .map((role) => {
+          const roleId = String(role.id);
+          const selected = String(selectedRoleId) === roleId ? " selected" : "";
+          return `<option value="${roleId}"${selected}>${role.name}</option>`;
+        })
+        .join("")
+    : '<option value="">No IMS roles available</option>';
+
+  employeeRoleSelect.innerHTML = `<option value="">Select IMS role</option>${options}`;
+
+  if (selectedRoleId) {
+    employeeRoleSelect.value = String(selectedRoleId);
+  }
+}
+
+function getActionIcon(iconName) {
+  const icons = {
+    add: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>',
+    close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 6 12 12"/><path d="m18 6-12 12"/></svg>',
+    edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 20h9"/><path d="m16.5 3.5 4 4L7 21l-4 1 1-4z"/></svg>',
+    logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>',
+    profile: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="8" r="4"/></svg>',
+    refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>',
+    save: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>',
+    activate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2v10"/><path d="M18.4 5.6a9 9 0 1 1-12.8 0"/></svg>',
+    deactivate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2v10"/><path d="M5.6 5.6a9 9 0 1 0 12.8 0"/></svg>',
+    resend: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>',
+  };
+
+  return icons[iconName] || "";
+}
+
+function createActionButton({ label, icon, tone = "secondary-btn", datasetKey, datasetValue, extraAttributes = "" }) {
+  return `<button class="${tone} compact-btn action-btn action-btn--${icon}" type="button" data-${datasetKey}="${datasetValue}" ${extraAttributes}><span class="btn-icon">${getActionIcon(icon)}</span><span class="btn-label">${label}</span></button>`;
+}
+
+function setEmployeeStatusDisplay(status) {
+  if (!employeeStatusDisplay) {
+    return;
+  }
+
+  const normalized = String(status || "active").trim().toLowerCase();
+  employeeStatusDisplay.textContent = normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function clearEmployeeCredentials() {
+  employeeCredentialsPanel?.classList.add("hidden");
+  if (employeeCredentialsEmail) {
+    employeeCredentialsEmail.value = "";
+  }
+  if (employeeCredentialsPassword) {
+    employeeCredentialsPassword.value = "";
+  }
+}
+
+function showEmployeeCredentials(credentials) {
+  if (!employeeCredentialsPanel || !employeeCredentialsEmail || !employeeCredentialsPassword) {
+    return;
+  }
+
+  employeeCredentialsEmail.value = credentials?.email || "";
+  employeeCredentialsPassword.value = credentials?.temporaryPassword || "";
+  employeeCredentialsPanel.classList.remove("hidden");
+}
+
+function syncSettingsView() {
+  if (!state.actor) {
+    return;
+  }
+
+  const fullName = `${state.actor.firstName || ""} ${state.actor.lastName || ""}`.trim() || "HR User";
+  const initials = getInitials(state.actor.firstName, state.actor.lastName);
+  const roleLabel = String(state.actor.role || "HR Recruitment Officer").toUpperCase();
+  const statusLabel = String(state.actor.status || "active").toUpperCase();
+
+  if (settingsFirstName) settingsFirstName.value = state.actor.firstName || "";
+  if (settingsLastName) settingsLastName.value = state.actor.lastName || "";
+  if (settingsEmail) settingsEmail.value = state.actor.email || "";
+  if (settingsPhoneNumber) settingsPhoneNumber.value = state.actor.phoneNumber || "";
+  if (settingsProfileAvatar) settingsProfileAvatar.textContent = initials;
+  if (settingsSummaryAvatar) settingsSummaryAvatar.textContent = initials;
+  if (settingsProfileName) settingsProfileName.textContent = fullName;
+  if (settingsSummaryName) settingsSummaryName.textContent = fullName;
+  if (settingsProfileEmailPreview) settingsProfileEmailPreview.textContent = state.actor.email || "No email";
+  if (settingsSummaryEmail) settingsSummaryEmail.textContent = state.actor.email || "No email";
+  if (settingsProfileRole) settingsProfileRole.textContent = roleLabel;
+  if (settingsSummaryRole) settingsSummaryRole.textContent = roleLabel;
+  if (settingsSummaryStatus) settingsSummaryStatus.textContent = statusLabel;
+  if (settingsSummaryPhone) settingsSummaryPhone.textContent = state.actor.phoneNumber || "Not assigned";
+  if (settingsSummaryDepartment) settingsSummaryDepartment.textContent = state.actor.departmentName || "Not assigned";
+  if (settingsSummaryJob) settingsSummaryJob.textContent = state.actor.jobTitle || "Not assigned";
 }
 
 function setActiveSection(sectionId) {
@@ -361,6 +677,9 @@ function setActiveSection(sectionId) {
   updateActiveLinkState();
   openGroupForSection(safeSection);
   updateSectionMeta();
+  if (safeSection === "settings") {
+    syncSettingsView();
+  }
   if (window.innerWidth <= 980) {
     setSidebarOpen(false);
   }
@@ -392,27 +711,11 @@ async function requestJson(url, options = {}) {
   return data;
 }
 
-function formatDate(value) {
-  if (!value) {
-    return "Not provided";
-  }
-
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString();
-}
-
-function createDetailCard(label, value) {
-  return `
-    <article class="detail-card">
-      <span>${label}</span>
-      <strong>${value || "Not provided"}</strong>
-    </article>
-  `;
-}
-
 function showAuthView() {
   authShell.classList.remove("hidden");
   dashboardShell.classList.add("hidden");
+  hideSessionWarning();
+  stopSessionTimers();
 }
 
 function showDashboardView() {
@@ -434,10 +737,9 @@ function renderOverviewCards() {
   );
   const cards = [
     {
-      key: "total",
+      key: "employeeTotal",
       title: "Total Employees",
       value: Number(stats.totalEmployees || 0),
-      note: "Source records currently managed in HRMS and prepared for IMS sync.",
       action: "Open directory",
       section: "directory",
       filter: "all",
@@ -447,7 +749,6 @@ function renderOverviewCards() {
       key: "active",
       title: "Active Employees",
       value: Number(stats.activeEmployees || 0),
-      note: "Profiles ready for onboarding and normal lifecycle support.",
       action: "View active employees",
       section: "directory",
       filter: "active",
@@ -456,16 +757,14 @@ function renderOverviewCards() {
       key: "pending",
       title: "Pending Profiles",
       value: Number(stats.pendingEmployees || 0),
-      note: "Records that still need HR completion before they are fully ready.",
       action: "Review pending profiles",
       section: "directory",
       filter: "pending",
     },
     {
-      key: "settings",
+      key: "inactive",
       title: "Inactive Profiles",
       value: inactiveEmployees,
-      note: "Employees marked inactive and kept for historical tracking.",
       action: "Review inactive employees",
       section: "directory",
       filter: "inactive",
@@ -481,10 +780,8 @@ function renderOverviewCards() {
               <p class="metric-kicker">${card.featured ? "HRMS overview" : "Employee focus"}</p>
               <h3>${card.title}</h3>
             </div>
-            <span class="metric-card-icon">${iconMap[card.key] || ""}</span>
           </div>
           <strong>${card.value}</strong>
-          <p>${card.note}</p>
           <span class="metric-card-action">${card.action} &#8594;</span>
         </button>
       `,
@@ -500,23 +797,22 @@ function renderOverviewCards() {
     <section class="dashboard-panel overview-panel">
       <div class="panel-header">
         <div>
-          <p class="eyebrow">Sync Health</p>
-          <h3>IMS readiness summary</h3>
+          <p class="eyebrow">IMS Overview</p>
+          <h3>Connection summary</h3>
         </div>
       </div>
       <div class="overview-stat-strip">
         <article class="overview-stat-card">
-          <span>Linked to IMS</span>
+          <span>IMS linked</span>
           <strong>${Number(stats.linkedToIms || 0)}</strong>
-          <small>${syncCoverage}% of HRMS records</small>
+          <small>${syncCoverage}% linked</small>
         </article>
         <article class="overview-stat-card">
-          <span>Departments covered</span>
+          <span>Departments</span>
           <strong>${Number(stats.departments || 0)}</strong>
-          <small>Across the current employee directory</small>
+          <small>Active in directory</small>
         </article>
       </div>
-      <p class="status-text">Use the employee directory to inspect profiles, then keep registration details current before IMS assignment workflows begin.</p>
     </section>
     <section class="dashboard-panel overview-panel">
       <div class="panel-header">
@@ -553,7 +849,6 @@ function applyRoleView() {
   if (!hrView && state.activeSection === "register") {
     setActiveSection("overview");
   }
-  inspectorNextStep.textContent = "IMS can retrieve this employee during equipment requests.";
 }
 
 function getFilteredEmployees() {
@@ -585,88 +880,121 @@ function getFilteredEmployees() {
   });
 }
 
-function renderInspector() {
-  const employee = state.employees.find((item) => item.id === state.selectedEmployeeId);
-  if (!employee) {
-    inspectorEmpty.classList.remove("hidden");
-    inspectorContent.classList.add("hidden");
-    return;
-  }
-
-  inspectorEmpty.classList.add("hidden");
-  inspectorContent.classList.remove("hidden");
-  inspectorName.textContent = employee.full_name;
-  inspectorSubtitle.textContent = `${employee.job_title || "No job title"} | ${employee.email || "No email"}`;
-  inspectorStatus.textContent = employee.status || "active";
-  inspectorDevice.textContent = employee.recommended_device_profile || "Standard office laptop";
-  inspectorReason.textContent = employee.recommended_device_reason || "Recommendation is based on employee role and working profile.";
-  inspectorDetails.innerHTML = [
-    createDetailCard("Employee code", employee.employee_code),
-    createDetailCard("HRMS employee ID", employee.hrms_employee_id),
-    createDetailCard("Department", employee.department_name),
-    createDetailCard("Employment status", employee.employment_status),
-    createDetailCard("Office location", employee.office_location),
-    createDetailCard("Phone number", employee.phone_number),
-    createDetailCard("Start date", formatDate(employee.start_date)),
-    createDetailCard("IMS status", employee.ims_account_status || "Linked to IMS"),
-  ].join("");
+async function loadRoleOptions() {
+  const data = await requestJson("/api/roles");
+  state.roleOptions = Array.isArray(data.roles) ? data.roles : [];
+  renderRoleOptions(employeeForm.roleId?.value || "");
 }
 
 function renderEmployees() {
   const filtered = getFilteredEmployees();
+  const totalPages = Math.max(1, Math.ceil(filtered.length / state.employeesPerPage));
+  const currentPage = Math.min(state.employeePage, totalPages);
+  const pageStart = (currentPage - 1) * state.employeesPerPage;
+  const paginatedEmployees = filtered.slice(pageStart, pageStart + state.employeesPerPage);
+
+  state.employeePage = currentPage;
   directoryCountPill.textContent = `${filtered.length} employee${filtered.length === 1 ? "" : "s"} loaded`;
+  if (employeePageStatus) {
+    employeePageStatus.textContent = `Page ${currentPage} of ${totalPages}`;
+  }
+  employeePagePrevButton?.toggleAttribute("disabled", currentPage <= 1);
+  employeePageNextButton?.toggleAttribute("disabled", currentPage >= totalPages);
 
   if (filtered.length === 0) {
     employeeList.innerHTML = `
-      <article class="employee-card">
-        <h4>No employees found</h4>
-        <p class="employee-card-footer">Try another filter, another search term, or refresh the employee directory.</p>
-      </article>
+      <tr>
+        <td colspan="7">
+          <strong>No employees found</strong>
+          <small>Try another filter, another search term, or refresh the employee directory.</small>
+        </td>
+      </tr>
     `;
+    if (employeePageStatus) {
+      employeePageStatus.textContent = "Page 0 of 0";
+    }
+    employeePagePrevButton?.setAttribute("disabled", "disabled");
+    employeePageNextButton?.setAttribute("disabled", "disabled");
     return;
   }
 
-  employeeList.innerHTML = filtered
+  employeeList.innerHTML = paginatedEmployees
     .map((employee) => {
-      const selectedClass = employee.id === state.selectedEmployeeId ? " active" : "";
+      const selectedClass = employee.id === state.selectedEmployeeId ? " is-selected" : "";
+      const nextStatus = employee.status === "inactive" ? "active" : "inactive";
+      const statusLabel = nextStatus === "active" ? "Activate" : "Deactivate";
       const managementAction = isHrRole()
-        ? `<button class="secondary-btn compact-btn" type="button" data-edit-id="${employee.id}">Edit</button><button class="secondary-btn compact-btn ${employee.status === "inactive" ? "" : "danger-btn"}" type="button" data-status-id="${employee.id}" data-status-value="${employee.status === "inactive" ? "active" : "inactive"}">${employee.status === "inactive" ? "Reactivate" : "Set inactive"}</button><button class="secondary-btn compact-btn danger-btn" type="button" data-delete-id="${employee.id}">Delete</button>`
+        ? [
+            createActionButton({
+              label: "Edit",
+              icon: "edit",
+              tone: "secondary-btn",
+              datasetKey: "edit-id",
+              datasetValue: employee.id,
+            }),
+            createActionButton({
+              label: statusLabel,
+              icon: nextStatus === "active" ? "activate" : "deactivate",
+              tone: nextStatus === "active" ? "secondary-btn" : "secondary-btn danger-btn",
+              datasetKey: "status-id",
+              datasetValue: employee.id,
+              extraAttributes: `data-status-value="${nextStatus}"`,
+            }),
+            createActionButton({
+              label: "Resend email",
+              icon: "resend",
+              tone: "secondary-btn",
+              datasetKey: "resend-id",
+              datasetValue: employee.id,
+            }),
+          ].join("")
         : "";
 
       return `
-        <article class="employee-card${selectedClass}">
-          <div class="employee-card-header">
-            <div>
-              <h4>${employee.full_name}</h4>
-              <p class="employee-card-footer">${employee.email}</p>
-            </div>
-            <div class="employee-card-actions">
-              <button class="primary-btn compact-btn" type="button" data-select-id="${employee.id}">Inspect</button>
+        <tr class="${selectedClass.trim()}">
+          <td>
+            <strong>${employee.full_name}</strong>
+            <small>${employee.employee_code || "No code"}</small>
+          </td>
+          <td>${employee.email || "No email"}</td>
+          <td>${employee.ims_role_name || "No IMS role"}</td>
+          <td>${employee.department_name || "No department"}</td>
+          <td><span class="role-chip">${employee.status || "No account status"}</span></td>
+          <td>${employee.ims_account_status || "Linked to IMS"}</td>
+          <td>
+            <div class="table-action-row">
               ${managementAction}
             </div>
-          </div>
-          <div class="employee-card-tags">
-            <span>${employee.employee_code || "No code"}</span>
-            <span>${employee.department_name || "No department"}</span>
-            <span>${employee.status || "No account status"}</span>
-            <span>${employee.ims_account_status || "Linked to IMS"}</span>
-          </div>
-          <p class="employee-card-footer">
-            ${employee.job_title || "No job title"} | ${employee.office_location || "No office location"} | ${employee.recommended_device_profile || "Standard office laptop"}
-          </p>
-        </article>
+          </td>
+        </tr>
       `;
     })
     .join("");
+}
+
+function openEmployeeModal() {
+  employeeModalOverlay?.classList.remove("hidden");
+}
+
+function closeEmployeeModal() {
+  employeeModalOverlay?.classList.add("hidden");
 }
 
 function resetEmployeeForm() {
   state.editingEmployeeId = null;
   employeeForm.reset();
   employeeForm.status.value = "active";
-  employeeFormTitle.textContent = "Edit employee";
-  cancelEditButton.classList.add("hidden");
-  setMessage(employeeMessage, "Select an existing employee to update HRMS source records.");
+  setEmployeeStatusDisplay("active");
+  clearEmployeeCredentials();
+  if (state.roleOptions.length > 0) {
+    renderRoleOptions(state.roleOptions[0]?.id || "");
+  } else {
+    renderRoleOptions("");
+  }
+  employeeFormTitle.textContent = "Add employee";
+  cancelEditButton.classList.remove("hidden");
+  setMessage(employeeMessage, "");
+  closeEmployeeModal();
 }
 
 function fillEmployeeForm(employee) {
@@ -677,27 +1005,39 @@ function fillEmployeeForm(employee) {
   employeeForm.phoneNumber.value = employee.phone_number || "";
   employeeForm.employeeCode.value = employee.employee_code || "";
   employeeForm.hrmsEmployeeId.value = employee.hrms_employee_id || "";
+  renderRoleOptions(employee.ims_role_id || "");
   employeeForm.jobTitle.value = employee.job_title || "";
   employeeForm.officeLocation.value = employee.office_location || "";
   employeeForm.departmentName.value = employee.department_name || "";
   employeeForm.startDate.value = employee.start_date ? String(employee.start_date).slice(0, 10) : "";
   employeeForm.status.value = employee.status || employee.employment_status || "active";
+  setEmployeeStatusDisplay(employeeForm.status.value);
+  clearEmployeeCredentials();
   employeeFormTitle.textContent = `Edit ${employee.full_name}`;
   cancelEditButton.classList.remove("hidden");
-  setMessage(employeeMessage, "Update the HRMS source record here. IMS will consume the change through API sync.");
-  setActiveSection("register");
+  setMessage(employeeMessage, "");
+  openEmployeeModal();
 }
 
 function hydrateActorView() {
   const fullName = state.actor?.fullName || `${state.actor?.firstName || ""} ${state.actor?.lastName || ""}`.trim() || "User";
   const roleName = state.actor?.role || "hrms user";
-  actorName.textContent = fullName;
-  actorRole.textContent = roleName.toLowerCase();
+  if (actorName) {
+    actorName.textContent = fullName;
+  }
+  if (actorRole) {
+    actorRole.textContent = roleName.toLowerCase();
+  }
   mastheadAvatar.textContent = getInitials(state.actor?.firstName, state.actor?.lastName);
+  syncSettingsView();
   applyRoleView();
   showDashboardView();
   applyIcons();
   updateSectionMeta();
+  if (!window.sessionStorage.getItem(SESSION_ACTIVITY_KEY)) {
+    touchSessionActivity();
+  }
+  startSessionMonitoring();
 }
 
 async function loadDashboard() {
@@ -710,11 +1050,11 @@ async function loadDashboard() {
 async function loadEmployees() {
   const data = await requestJson("/api/employees");
   state.employees = Array.isArray(data.employees) ? data.employees : [];
+  state.employeePage = 1;
   if (!state.selectedEmployeeId && state.employees.length > 0) {
     state.selectedEmployeeId = state.employees[0].id;
   }
   renderEmployees();
-  renderInspector();
 }
 
 async function restoreSession() {
@@ -728,8 +1068,8 @@ async function restoreSession() {
     const session = await requestJson("/api/auth/session", { method: "GET" });
     state.actor = session.user;
     persistSession();
-    await loadDashboard();
-    await loadEmployees();
+    await Promise.all([loadRoleOptions(), loadDashboard(), loadEmployees()]);
+    resetEmployeeForm();
   } catch {
     clearSession();
     showAuthView();
@@ -754,10 +1094,11 @@ loginForm.addEventListener("submit", async (event) => {
     state.actor = data.user;
     state.token = data.token || "";
     persistSession();
+    touchSessionActivity();
     hydrateActorView();
     setMessage(loginHint, `Signed in as ${state.actor.firstName} ${state.actor.lastName}.`);
-    await loadDashboard();
-    await loadEmployees();
+    await Promise.all([loadRoleOptions(), loadDashboard(), loadEmployees()]);
+    resetEmployeeForm();
   } catch (error) {
     setMessage(loginHint, error.message, true);
   }
@@ -787,13 +1128,14 @@ userMenuTrigger.addEventListener("click", (event) => {
   toggleUserMenu();
 });
 
+userMenuProfile?.addEventListener("click", () => {
+  closeUserMenu();
+  openActorProfile();
+});
+
 userMenuLogout.addEventListener("click", async () => {
   closeUserMenu();
-  await closeHrmsSession();
-  clearSession();
-  resetEmployeeForm();
-  closeProfilePanel();
-  showAuthView();
+  await handleLogout();
 });
 
 profilePanelClose.addEventListener("click", () => {
@@ -801,7 +1143,7 @@ profilePanelClose.addEventListener("click", () => {
 });
 
 window.addEventListener("click", (event) => {
-  if (!userMenuDropdown.contains(event.target) && event.target !== userMenuTrigger) {
+  if (!userMenuDropdown.contains(event.target) && !userMenuTrigger.contains(event.target)) {
     closeUserMenu();
   }
 });
@@ -812,16 +1154,27 @@ workspaceGroupToggle.addEventListener("click", () => {
   workspaceGroupToggle.setAttribute("aria-expanded", String(expanded));
 });
 
-managementGroupToggle.addEventListener("click", () => {
-  const expanded = managementGroupLinks.classList.contains("is-closed");
-  toggleGroup(managementGroupLinks, managementGroupChevron, expanded);
-  managementGroupToggle.setAttribute("aria-expanded", String(expanded));
-});
+if (managementGroupToggle && managementGroupLinks && managementGroupChevron) {
+  managementGroupToggle.addEventListener("click", () => {
+    const expanded = managementGroupLinks.classList.contains("is-closed");
+    toggleGroup(managementGroupLinks, managementGroupChevron, expanded);
+    managementGroupToggle.setAttribute("aria-expanded", String(expanded));
+  });
+}
 
 sectionButtons.forEach((button) => {
   button.addEventListener("click", () => {
     const target = button.getAttribute("data-section-target");
     if (target) {
+      if (target === "settings") {
+        openActorProfile();
+        return;
+      }
+      if (target === "register") {
+        resetEmployeeForm();
+        openEmployeeModal();
+        return;
+      }
       setActiveSection(target);
     }
   });
@@ -835,25 +1188,26 @@ employeeForm.addEventListener("submit", async (event) => {
     return;
   }
 
-  if (!state.editingEmployeeId) {
-    setMessage(employeeMessage, "Please select an existing employee to edit. New employee registration is disabled.", true);
-    return;
-  }
-
   const payload = {
     firstName: employeeForm.firstName.value.trim(),
     lastName: employeeForm.lastName.value.trim(),
-    email: employeeForm.email.value.trim(),
+    email: employeeForm.email.value.trim().toLowerCase(),
     phoneNumber: employeeForm.phoneNumber.value.trim() || null,
+    roleId: employeeForm.roleId.value ? Number(employeeForm.roleId.value) : null,
     employeeCode: employeeForm.employeeCode.value.trim() || null,
     hrmsEmployeeId: employeeForm.hrmsEmployeeId.value.trim() || null,
     jobTitle: employeeForm.jobTitle.value.trim() || null,
-    employmentStatus: employeeForm.status.value,
+    employmentStatus: state.editingEmployeeId ? employeeForm.status.value || "active" : "active",
     officeLocation: employeeForm.officeLocation.value.trim() || null,
     departmentName: employeeForm.departmentName.value.trim() || null,
     startDate: employeeForm.startDate.value || null,
-    status: employeeForm.status.value,
+    status: state.editingEmployeeId ? employeeForm.status.value || "active" : "active",
   };
+
+  if (!payload.roleId) {
+    setMessage(employeeMessage, "Please select the IMS role this employee should use.", true);
+    return;
+  }
 
   const url = state.editingEmployeeId ? `/api/employees/${state.editingEmployeeId}` : "/api/employees";
   const method = state.editingEmployeeId ? "PUT" : "POST";
@@ -866,8 +1220,18 @@ employeeForm.addEventListener("submit", async (event) => {
 
     const successMessage =
       response.message || (state.editingEmployeeId ? "Employee updated successfully." : "Employee created successfully.");
-    resetEmployeeForm();
     setMessage(employeeMessage, successMessage);
+    if (!state.editingEmployeeId) {
+      if (response.employee) {
+        fillEmployeeForm(response.employee);
+      }
+      if (response.credentials) {
+        showEmployeeCredentials(response.credentials);
+      }
+    } else {
+      clearEmployeeCredentials();
+      closeEmployeeModal();
+    }
     await loadDashboard();
     await loadEmployees();
   } catch (error) {
@@ -875,8 +1239,100 @@ employeeForm.addEventListener("submit", async (event) => {
   }
 });
 
-employeeSearch.addEventListener("input", renderEmployees);
-employeeFilter.addEventListener("change", renderEmployees);
+settingsProfileForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  setInlineMessage(settingsProfileSuccess, "", "");
+  setInlineMessage(settingsProfileError, "", "");
+  settingsProfileSubmit?.setAttribute("disabled", "disabled");
+
+  try {
+    const response = await requestJson("/api/account/profile", {
+      method: "POST",
+      body: JSON.stringify({
+        firstName: settingsFirstName?.value.trim() || "",
+        lastName: settingsLastName?.value.trim() || "",
+        email: settingsEmail?.value.trim().toLowerCase() || "",
+        phoneNumber: settingsPhoneNumber?.value.trim() || null,
+      }),
+    });
+
+    if (response.user) {
+      state.actor = response.user;
+    }
+    if (response.token) {
+      state.token = response.token;
+      persistSession();
+    }
+
+    hydrateActorView();
+    setActiveSection("settings");
+    setInlineMessage(settingsProfileSuccess, response.message || "Profile updated successfully.", "success");
+  } catch (error) {
+    setInlineMessage(settingsProfileError, error.message, "error");
+  } finally {
+    settingsProfileSubmit?.removeAttribute("disabled");
+  }
+});
+
+settingsPasswordForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  setInlineMessage(settingsPasswordSuccess, "", "");
+  setInlineMessage(settingsPasswordError, "", "");
+
+  const currentPassword = settingsPasswordForm.currentPassword?.value || "";
+  const newPassword = settingsPasswordForm.newPassword?.value || "";
+  const confirmPassword = settingsPasswordForm.confirmPassword?.value || "";
+
+  if (newPassword !== confirmPassword) {
+    setInlineMessage(settingsPasswordError, "New password and confirmation do not match.", "error");
+    return;
+  }
+
+  settingsPasswordSubmit?.setAttribute("disabled", "disabled");
+
+  try {
+    const response = await requestJson("/api/account/password", {
+      method: "POST",
+      body: JSON.stringify({
+        currentPassword,
+        newPassword,
+      }),
+    });
+
+    settingsPasswordForm.reset();
+    setInlineMessage(settingsPasswordSuccess, response.message || "Password updated successfully.", "success");
+  } catch (error) {
+    setInlineMessage(settingsPasswordError, error.message, "error");
+  } finally {
+    settingsPasswordSubmit?.removeAttribute("disabled");
+  }
+});
+
+employeeSearch.addEventListener("input", () => {
+  state.employeePage = 1;
+  renderEmployees();
+});
+employeeFilter.addEventListener("change", () => {
+  state.employeePage = 1;
+  renderEmployees();
+});
+
+employeePagePrevButton?.addEventListener("click", () => {
+  if (state.employeePage <= 1) {
+    return;
+  }
+  state.employeePage -= 1;
+  renderEmployees();
+});
+
+employeePageNextButton?.addEventListener("click", () => {
+  const totalPages = Math.max(1, Math.ceil(getFilteredEmployees().length / state.employeesPerPage));
+  if (state.employeePage >= totalPages) {
+    return;
+  }
+  state.employeePage += 1;
+  renderEmployees();
+});
 
 refreshButton.addEventListener("click", async () => {
   try {
@@ -887,21 +1343,26 @@ refreshButton.addEventListener("click", async () => {
   }
 });
 
+createEmployeeButton?.addEventListener("click", () => {
+  resetEmployeeForm();
+  openEmployeeModal();
+});
+
 cancelEditButton.addEventListener("click", resetEmployeeForm);
+employeeModalCloseButtons.forEach((button) => {
+  button.addEventListener("click", resetEmployeeForm);
+});
+
+employeeModalOverlay?.addEventListener("click", (event) => {
+  if (event.target === employeeModalOverlay) {
+    resetEmployeeForm();
+  }
+});
 
 employeeList.addEventListener("click", async (event) => {
-  const selectButton = event.target.closest("[data-select-id]");
   const editButton = event.target.closest("[data-edit-id]");
   const statusButton = event.target.closest("[data-status-id]");
-  const deleteButton = event.target.closest("[data-delete-id]");
-
-  if (selectButton) {
-    state.selectedEmployeeId = Number(selectButton.getAttribute("data-select-id"));
-    renderEmployees();
-    renderInspector();
-    setActiveSection("inspector");
-    return;
-  }
+  const resendButton = event.target.closest("[data-resend-id]");
 
   if (!editButton) {
     if (statusButton) {
@@ -927,6 +1388,7 @@ employeeList.addEventListener("click", async (event) => {
             lastName: employee.last_name || "",
             email: employee.email || "",
             phoneNumber: employee.phone_number || null,
+            roleId: employee.ims_role_id || null,
             employeeCode: employee.employee_code || null,
             hrmsEmployeeId: employee.hrms_employee_id || null,
             employeeGrade: employee.employee_grade || null,
@@ -942,7 +1404,7 @@ employeeList.addEventListener("click", async (event) => {
           }),
         });
 
-        setMessage(employeeMessage, response.message || `Employee marked ${nextStatus}.`);
+        setMessage(employeeMessage, response.message || `Employee ${nextStatus === "active" ? "activated" : "deactivated"} successfully.`);
         await loadDashboard();
         await loadEmployees();
       } catch (error) {
@@ -952,29 +1414,23 @@ employeeList.addEventListener("click", async (event) => {
       return;
     }
 
-    if (!deleteButton) {
+    if (!resendButton) {
       return;
     }
 
-    const employeeIdToDelete = Number(deleteButton.getAttribute("data-delete-id"));
+    const employeeIdToResend = Number(resendButton.getAttribute("data-resend-id"));
 
-    if (!employeeIdToDelete || !window.confirm("Delete this employee from HRMS?")) {
+    if (!employeeIdToResend) {
       return;
     }
 
     try {
-      const response = await requestJson(`/api/employees/${employeeIdToDelete}`, {
-        method: "DELETE",
+      const response = await requestJson(`/api/employees/${employeeIdToResend}/resend-credentials`, {
+        method: "POST",
       });
 
-      if (state.selectedEmployeeId === employeeIdToDelete) {
-        state.selectedEmployeeId = null;
-      }
-
-      resetEmployeeForm();
-      setMessage(employeeMessage, response.message || "Employee deleted successfully.");
-      await loadDashboard();
       await loadEmployees();
+      setMessage(employeeMessage, response.message || "Login credentials email sent.");
     } catch (error) {
       setMessage(employeeMessage, error.message, true);
     }
@@ -1023,8 +1479,7 @@ overviewInsights.addEventListener("click", (event) => {
 
   state.selectedEmployeeId = employeeId;
   renderEmployees();
-  renderInspector();
-  setActiveSection("inspector");
+  setActiveSection("directory");
 });
 
 window.addEventListener("resize", () => {
@@ -1037,8 +1492,19 @@ window.addEventListener("resize", () => {
   }
 });
 
+["mousemove", "mousedown", "keydown", "scroll", "touchstart", "click"].forEach((eventName) => {
+  window.addEventListener(eventName, handleActivity, { passive: true });
+});
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+  });
+}
+
 applyIcons();
 setGroupState("workspace", true);
 setGroupState("management", true);
 setActiveSection("overview");
+renderRoleOptions("");
 void restoreSession();
