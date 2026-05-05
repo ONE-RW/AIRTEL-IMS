@@ -1,0 +1,13 @@
+flask>=3.0.0
+flask-cors>=4.0.0
+sqlalchemy>=2.0.0
+python-dotenv>=1.0.0
+gunicorn>=21.0.0
+ 
+# AI providers — install the one you need (or all three)
+anthropic>=0.25.0      # for AI_PROVIDER=anthropic
+openai>=1.30.0         # for AI_PROVIDER=openai OR deepseek
+ 
+psutil
+requests 
+schedule

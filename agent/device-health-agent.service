@@ -1,0 +1,18 @@
+[Unit]
+Description=Device Health Agent
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/device-health-agent
+ExecStart=/usr/bin/python3 /opt/device-health-agent/agent.py
+Restart=always
+RestartSec=10
+Environment=CENTRAL_SERVER_URL=http://127.0.0.1:5000/
+Environment=AGENT_API_KEY=changeme-secret-key-replace-this
+Environment=DEVICE_LOCATION=Kigali-HQ-Floor1
+Environment=SCAN_INTERVAL=60
+
+[Install]
+WantedBy=multi-user.target

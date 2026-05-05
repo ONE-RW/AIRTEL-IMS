@@ -42,7 +42,7 @@ import { DonutChart, HorizontalBarChart } from "./RoleCharts";
 import UserMenu from "./UserMenu";
 import { fetchJson, getApiMessage, parseApiResponse } from "../api";
 import { API_BASE_URL } from "../config";
-import type { DeviceMonitoringOverview, LoggedInUser } from "../types";
+import type { DeviceMonitoringDetail, DeviceMonitoringOverview, LoggedInUser } from "../types";
 
 type RoleView = "branch-manager" | "hr" | "it-manager" | "it-infrastructure" | "it-security" | "it-support" | "warehouse" | "employee";
 type StockControlView = "all" | "available" | "returned" | "assigned" | "retired";
@@ -953,8 +953,47 @@ const emptyDeviceMonitoringOverview: DeviceMonitoringOverview = {
     onlineRecently: 0,
     openAlerts: 0,
   },
+  deployment: {
+    apiUrl: "",
+    installDirectory: "",
+    startupMode: "",
+    smokeTestCommand: "",
+    installExampleCommand: "",
+  },
   records: [],
 };
+
+const emptyDeviceMonitoringDetail: DeviceMonitoringDetail = {
+  equipmentId: 0,
+  assetTag: "",
+  equipmentName: "",
+  categoryName: null,
+  computerName: null,
+  branchName: null,
+  status: "",
+  deviceHealth: null,
+  assignedTo: null,
+  agent: null,
+  latestMetric: null,
+  recentMetrics: [],
+  recommendation: null,
+  recentAlerts: [],
+  usageSummary: [],
+};
+
+function normalizeDeviceMonitoringDetail(detail: Partial<DeviceMonitoringDetail> | null | undefined): DeviceMonitoringDetail {
+  return {
+    ...emptyDeviceMonitoringDetail,
+    ...detail,
+    assignedTo: detail?.assignedTo ?? null,
+    agent: detail?.agent ?? null,
+    latestMetric: detail?.latestMetric ?? null,
+    recommendation: detail?.recommendation ?? null,
+    recentMetrics: Array.isArray(detail?.recentMetrics) ? detail.recentMetrics : [],
+    recentAlerts: Array.isArray(detail?.recentAlerts) ? detail.recentAlerts : [],
+    usageSummary: Array.isArray(detail?.usageSummary) ? detail.usageSummary : [],
+  };
+}
 
 function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: WorkflowRoleDashboardProps) {
   const todayDateValue = new Date().toISOString().slice(0, 10);
@@ -1068,10 +1107,11 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
   const [exportFormat, setExportFormat] = useState<ExportFormat>("html");
   const [deviceMonitoringOverview, setDeviceMonitoringOverview] = useState<DeviceMonitoringOverview>(emptyDeviceMonitoringOverview);
   const [isDeviceMonitoringLoading, setIsDeviceMonitoringLoading] = useState(false);
-  const [isCreatingSampleDevice, setIsCreatingSampleDevice] = useState(false);
-  const [sampleDeviceComputerName, setSampleDeviceComputerName] = useState("");
-  const [selectedMonitoringAssetTag, setSelectedMonitoringAssetTag] = useState("");
-  const monitoringQuickStartRef = useRef<HTMLElement | null>(null);
+  const [selectedMonitoringEquipmentId, setSelectedMonitoringEquipmentId] = useState<number | null>(null);
+  const [selectedMonitoringDetail, setSelectedMonitoringDetail] = useState<DeviceMonitoringDetail>(emptyDeviceMonitoringDetail);
+  const [isMonitoringDetailLoading, setIsMonitoringDetailLoading] = useState(false);
+  const [deviceMonitoringError, setDeviceMonitoringError] = useState("");
+  const [monitoringDetailError, setMonitoringDetailError] = useState("");
   const monitoringFeedRef = useRef<HTMLElement | null>(null);
   const [reportExportKey, setReportExportKey] = useState("all");
   const [reportExportScheduleDate, setReportExportScheduleDate] = useState("");
@@ -1094,6 +1134,8 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
   const [moveOrderNote, setMoveOrderNote] = useState("");
   const [isMoveOrderModalOpen, setIsMoveOrderModalOpen] = useState(false);
   const [warehouseDecisionNotes, setWarehouseDecisionNotes] = useState<Record<number, string>>({});
+  const [selectedMoveOrderStatusOrder, setSelectedMoveOrderStatusOrder] = useState<MoveOrderRow | null>(null);
+  const [selectedRequestContextRequest, setSelectedRequestContextRequest] = useState<RequestRow | null>(null);
   const [selectedBranchEmployeeId, setSelectedBranchEmployeeId] = useState<number | null>(null);
   const [selectedDetailPanel, setSelectedDetailPanel] = useState<DetailPanelState | null>(null);
   const [selectedQrEquipment, setSelectedQrEquipment] = useState<EquipmentRow | null>(null);
@@ -1147,6 +1189,48 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
     includedAccessories: [],
     accessoryNotes: "",
   });
+
+  const getMonitoringFreshness = (timestamp: string | null | undefined) => {
+    if (!timestamp) {
+      return { label: "offline", className: "status-pending" };
+    }
+
+    const ageMs = Date.now() - new Date(timestamp).getTime();
+    if (ageMs <= 90 * 1000) {
+      return { label: "online", className: "status-available" };
+    }
+    if (ageMs <= 10 * 60 * 1000) {
+      return { label: "stale", className: "status-pending" };
+    }
+    return { label: "offline", className: "status-lost" };
+  };
+
+  const buildTelemetryCurve = (values: number[], maxValue = 100) => {
+    if (values.length === 0) {
+      return "";
+    }
+
+    const width = 1000;
+    const height = 220;
+    const paddingX = 28;
+    const paddingY = 18;
+
+    return values
+      .map((value, index) => {
+        const clampedValue = Math.max(0, Math.min(value, maxValue));
+        const x = paddingX + (index * (width - paddingX * 2)) / Math.max(values.length - 1, 1);
+        const y = height - paddingY - (clampedValue / maxValue) * (height - paddingY * 2);
+        return `${index === 0 ? "M" : "L"}${x} ${y}`;
+      })
+      .join(" ");
+  };
+
+  const renderQrPreview = (assetTag: string) => (
+    <div className="qr-preview">
+      <img src={equipmentQrImageUrl} alt={`${assetTag} QR code`} />
+      <span className="qr-brand-subtitle">Airtel</span>
+    </div>
+  );
 
   const loadDashboard = async () => {
     setIsLoading(true);
@@ -1210,10 +1294,12 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
   const loadDeviceMonitoringOverview = async () => {
     if (roleView !== "it-support") {
       setDeviceMonitoringOverview(emptyDeviceMonitoringOverview);
+      setDeviceMonitoringError("");
       return;
     }
 
     setIsDeviceMonitoringLoading(true);
+    setDeviceMonitoringError("");
 
     try {
       const { response, data } = await fetchJson<DeviceMonitoringOverview>(`${API_BASE_URL}/device-monitoring/overview?userId=${user.id}`);
@@ -1223,9 +1309,9 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       }
 
       setDeviceMonitoringOverview(data);
-      setSelectedMonitoringAssetTag((current) => current || data.records[0]?.assetTag || "");
+      setSelectedMonitoringEquipmentId((current) => current ?? data.records[0]?.equipmentId ?? null);
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Failed to load device monitoring data.");
+      setDeviceMonitoringError(error instanceof Error ? error.message : "Failed to load device monitoring data.");
     } finally {
       setIsDeviceMonitoringLoading(false);
     }
@@ -1235,89 +1321,47 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
     void loadDeviceMonitoringOverview();
   }, [roleView, user.id]);
 
-  const downloadBlobResponse = async (endpoint: string, fallbackFileName: string) => {
-    const response = await fetch(endpoint);
-    if (!response.ok) {
-      const data = await parseApiResponse<{ message?: string }>(response);
-      throw new Error(getApiMessage(data, "Download failed."));
-    }
-
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = getDownloadFileName(response, fallbackFileName);
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleCreateSampleMonitoredDevice = async () => {
-    setIsCreatingSampleDevice(true);
-    setActionError("");
-    setActionMessage("");
+  const loadMonitoringDetail = async (equipmentId: number) => {
+    setIsMonitoringDetailLoading(true);
+    setMonitoringDetailError("");
 
     try {
-      const { response, data } = await fetchJson<{ message?: string; equipment?: { assetTag: string } }>(`${API_BASE_URL}/device-monitoring/sample-device`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          actorUserId: user.id,
-          computerName: sampleDeviceComputerName,
-        }),
-      });
+      const { response, data } = await fetchJson<DeviceMonitoringDetail>(`${API_BASE_URL}/device-monitoring/detail?userId=${user.id}&equipmentId=${equipmentId}`);
 
-      if (!response.ok) {
-        throw new Error(getApiMessage(data, "Failed to create sample device."));
+      if (!response.ok || !data) {
+        throw new Error(getApiMessage(data, "Failed to load monitored device details."));
       }
 
-      setActionMessage(data?.message || "Sample monitored device created.");
-      setSelectedMonitoringAssetTag(data?.equipment?.assetTag || "");
-      setSampleDeviceComputerName("");
-      await loadDashboard();
-      await loadDeviceMonitoringOverview();
+      setSelectedMonitoringDetail(normalizeDeviceMonitoringDetail(data));
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Failed to create sample device.");
+      setSelectedMonitoringDetail(emptyDeviceMonitoringDetail);
+      setMonitoringDetailError(error instanceof Error ? error.message : "Failed to load monitored device details.");
     } finally {
-      setIsCreatingSampleDevice(false);
+      setIsMonitoringDetailLoading(false);
     }
   };
 
-  const handleDownloadMonitoringAsset = async (file: "AirtelIMSDeviceAgent.exe" | "install-agent.ps1" | "README.md" | "requirements.txt") => {
-    setActionError("");
-    setActionMessage("");
-
-    try {
-      await downloadBlobResponse(`${API_BASE_URL}/device-monitoring/download?userId=${user.id}&file=${encodeURIComponent(file)}`, file);
-      setActionMessage(`${file} downloaded.`);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Unable to download monitoring asset.");
-    }
-  };
-
-  const handleDownloadMonitoringConfig = async () => {
-    if (!selectedMonitoringAssetTag) {
-      setActionError("Select or create a monitored asset first.");
+  useEffect(() => {
+    if (roleView !== "it-support" || !selectedMonitoringEquipmentId) {
+      setSelectedMonitoringDetail(emptyDeviceMonitoringDetail);
+      setMonitoringDetailError("");
       return;
     }
 
-    setActionError("");
-    setActionMessage("");
+    void loadMonitoringDetail(selectedMonitoringEquipmentId);
+  }, [roleView, selectedMonitoringEquipmentId, user.id]);
 
-    try {
-      await downloadBlobResponse(
-        `${API_BASE_URL}/device-monitoring/config?userId=${user.id}&assetTag=${encodeURIComponent(selectedMonitoringAssetTag)}`,
-        `agent-config-${selectedMonitoringAssetTag}.json`,
-      );
-      setActionMessage("Monitoring config downloaded.");
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Unable to download monitoring config.");
+  useEffect(() => {
+    if (roleView !== "it-support" || activeSection !== "device-monitoring") {
+      return;
     }
-  };
 
-  const scrollToMonitoringArea = (target: "quick-start" | "feed") => {
-    const element = target === "quick-start" ? monitoringQuickStartRef.current : monitoringFeedRef.current;
-    element?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
+    const intervalId = window.setInterval(() => {
+      void loadDeviceMonitoringOverview();
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [activeSection, roleView, user.id]);
 
   const categories = dashboardData?.categories ?? [];
   const equipment = dashboardData?.equipment ?? [];
@@ -1374,10 +1418,64 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
     const normalizedName = category.name.trim().toLowerCase();
     return defaultWarehouseCategoryNames.has(normalizedName) || String(category.id) === stockForm.categoryId;
   });
+  const moveOrderCategories = categories.filter((category) => {
+    const normalizedName = category.name.trim().toLowerCase();
+    const selectedCategoryIds = new Set(moveOrderItems.map((item) => item.categoryId));
+    return defaultWarehouseCategoryNames.has(normalizedName) || selectedCategoryIds.has(String(category.id));
+  });
   const resolvedEquipmentName = selectedStockCategory?.name || stockForm.equipmentName.trim();
   const isStorageDeviceStockForm = selectedStockCategory
     ? storageDeviceCategoryNames.has(selectedStockCategory.name.toLowerCase())
     : false;
+  const monitoringTelemetryHistory = useMemo(() => {
+    if (selectedMonitoringDetail.recentMetrics.length > 0) {
+      return [...selectedMonitoringDetail.recentMetrics].reverse();
+    }
+
+    if (selectedMonitoringDetail.latestMetric) {
+      return [
+        {
+          id: selectedMonitoringDetail.latestMetric.uptimeSeconds || 0,
+          cpuUsage: selectedMonitoringDetail.latestMetric.cpuUsage,
+          ramUsage: selectedMonitoringDetail.latestMetric.ramUsage,
+          diskUsage: selectedMonitoringDetail.latestMetric.diskUsage,
+          temperature: selectedMonitoringDetail.latestMetric.temperature,
+          recordedAt: selectedMonitoringDetail.latestMetric.recordedAt,
+        },
+      ];
+    }
+
+    return [];
+  }, [selectedMonitoringDetail]);
+  const monitoringTelemetrySeries = useMemo(
+    () => [
+      {
+        key: "cpu",
+        label: "CPU %",
+        values: monitoringTelemetryHistory.map((metric) => metric.cpuUsage),
+        unit: "%",
+      },
+      {
+        key: "ram",
+        label: "Memory %",
+        values: monitoringTelemetryHistory.map((metric) => metric.ramUsage),
+        unit: "%",
+      },
+      {
+        key: "disk",
+        label: "Disk %",
+        values: monitoringTelemetryHistory.map((metric) => metric.diskUsage),
+        unit: "%",
+      },
+      {
+        key: "temp",
+        label: "Temp °C",
+        values: monitoringTelemetryHistory.map((metric) => Math.max(0, Math.min(metric.temperature ?? 0, 100))),
+        unit: "°C",
+      },
+    ],
+    [monitoringTelemetryHistory],
+  );
 
   const normalizeWorkflowLabel = (label: string) =>
     label === "HR Device Booking" ? "Device Booking" : label;
@@ -1598,6 +1696,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
   const selectedBranchEmployee = selectedBranchEmployeeAssignments[0] ?? null;
   const getAssignmentsForEmployee = (employeeId: number) =>
     assignments.filter((assignment) => assignment.employee_user_id === employeeId);
+  const isCompactItSupportStockDetail = roleView === "it-support" && activeSection === "stock";
 
   const buildDetailPanel = (type: DetailEntityType, id: number): DetailPanelState | null => {
     if (type === "request") {
@@ -1626,6 +1725,28 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       if (!item) {
         return null;
       }
+      if (isCompactItSupportStockDetail) {
+        const risk = getEquipmentReplacementRisk(item);
+        return {
+          type,
+          title: item.asset_tag,
+          subtitle: `${item.equipment_name} / ${item.status}`,
+          qrEquipment: item,
+          rows: [
+            { label: "Serial number", value: item.serial_number },
+            { label: "Category", value: item.category_name || "Not set" },
+            { label: "Location", value: getEquipmentLocationLabel(item) },
+            { label: "Location detail", value: getEquipmentLocationDetail(item) },
+            { label: "Purchase date", value: formatProfileDate(item.purchase_date) },
+            { label: "Depreciation", value: getEquipmentDepreciationSummary(item) },
+            { label: "Replacement recommendation", value: `${risk.recommendation}: ${risk.score}%` },
+            { label: "Replacement target", value: getReplacementDate(item.purchase_date, item.lifespan_years, item.purchase_year) },
+            { label: "Warranty end", value: formatProfileDate(item.warranty_end_date) },
+            { label: "Health", value: item.device_health || item.replacement_condition_status || "No health status" },
+            { label: "Specs", value: formatEquipmentSpecs(item) || "Not set" },
+          ],
+        };
+      }
       const risk = getEquipmentReplacementRisk(item);
 
       return {
@@ -1652,6 +1773,26 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       const item = assignments.find((record) => record.id === id);
       if (!item) {
         return null;
+      }
+      if (isCompactItSupportStockDetail) {
+        const assignmentEquipment = buildEquipmentRowFromAssignment(item);
+        const risk = getEquipmentReplacementRisk(assignmentEquipment);
+        return {
+          type,
+          title: item.asset_tag,
+          subtitle: `${item.equipment_name} assigned to ${item.employee_name}`,
+          qrEquipment: assignmentEquipment,
+          rows: [
+            { label: "Assignment status", value: item.status },
+            { label: "Receipt", value: getAssignmentReceiptLabel(item) },
+            { label: "Assigned date", value: formatProfileDate(item.assigned_at) },
+            { label: "Expected return", value: formatProfileDate(item.expected_return_date) },
+            { label: "Employee", value: item.employee_name || "Not set" },
+            { label: "Depreciation", value: getAssignmentDepreciationSummary(item) },
+            { label: "Replacement recommendation", value: `${risk.recommendation}: ${risk.score}%` },
+            { label: "Specs", value: formatAssignmentEquipmentSpecs(item) || "Not set" },
+          ],
+        };
       }
       const assignmentEquipment = buildEquipmentRowFromAssignment(item);
       const risk = getEquipmentReplacementRisk(assignmentEquipment);
@@ -1741,7 +1882,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       await loadEquipmentQrPreview(detail.qrEquipment);
     }
 
-    if (type === "equipment" || type === "assignment") {
+    if ((type === "equipment" || type === "assignment") && !isCompactItSupportStockDetail) {
       const equipmentId = type === "equipment" ? id : assignments.find((record) => record.id === id)?.equipment_id;
       if (!equipmentId) {
         return;
@@ -4958,20 +5099,17 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                   <div className="workflow-table-stack">
                     <div className="user-secondary-cell">
                       <strong>{employeeName || "No target employee"}</strong>
-                      {isCompactView ? (
-                        <>
-                          <span>{employeeRole || "No role captured"}</span>
-                          <span>{employeeHrmsId || employeeCode || "No employee reference"}</span>
-                        </>
-                      ) : (
-                        <>
-                          <span>{request.target_employee_email || hrmsSnapshot.employeeEmail || "No email"}</span>
-                          <span>{employeeRole || "No role captured"} / {request.target_employee_department_name || "No department captured"}</span>
-                          <span>{employeeHrmsId || "No HRMS id"} / {employeeCode || "No employee code"} / {employeeGrade || "No employee grade"}</span>
-                          <span>{employeeLocation || "No office location"} / {employeeEmploymentStatus || "No employment status"} / Start {formatProfileDate(employeeStartDate)}</span>
-                          <span>{recommendedDeviceProfile || "No predicted device profile was generated yet."}</span>
-                        </>
-                      )}
+                      <span>{employeeRole || "No role captured"}</span>
+                      <span>{employeeHrmsId || employeeCode || "No employee reference"}</span>
+                      {!isCompactView ? (
+                        <button
+                          className="secondary-btn compact-btn workflow-note-trigger"
+                          type="button"
+                          onClick={() => setSelectedRequestContextRequest(request)}
+                        >
+                          See more
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                   <div className="workflow-table-stack">
@@ -5637,7 +5775,14 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                 </div>
                 <div className="user-secondary-cell">
                   <strong><span className={`status-pill status-${order.status}`}>{order.status}</span></strong>
-                  <div>{renderMoveOrderWorkflowProgress(order)}</div>
+                  <span>{formatLabelText(order.receipt_status)} receipt</span>
+                  <button
+                    className="secondary-btn compact-btn workflow-note-trigger"
+                    type="button"
+                    onClick={() => setSelectedMoveOrderStatusOrder(order)}
+                  >
+                    View status
+                  </button>
                 </div>
                 <div className="user-secondary-cell workflow-table-actions">
                   <strong>{order.reviewed_note || order.note || "No note"}</strong>
@@ -5701,6 +5846,44 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
             [pageKey]: page,
           }))
         )}
+        {selectedMoveOrderStatusOrder ? (
+          <div className="hr-modal-overlay" role="presentation" onClick={() => setSelectedMoveOrderStatusOrder(null)}>
+            <div
+              className="hr-modal-card"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="move-order-status-modal-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="panel-header">
+                <div>
+                  <h3 id="move-order-status-modal-title">{selectedMoveOrderStatusOrder.request_number} status</h3>
+                  <p className="dashboard-subtitle">
+                    {selectedMoveOrderStatusOrder.requester_name} / {selectedMoveOrderStatusOrder.destination_branch_name || user.branchName || "No destination"}
+                  </p>
+                </div>
+                <button className="secondary-btn compact-btn" type="button" onClick={() => setSelectedMoveOrderStatusOrder(null)}>
+                  Close
+                </button>
+              </div>
+              <div className="workflow-table-stack">
+                <div className="user-secondary-cell">
+                  <strong><span className={`status-pill status-${selectedMoveOrderStatusOrder.status}`}>{selectedMoveOrderStatusOrder.status}</span></strong>
+                  <span>Receipt: {formatLabelText(selectedMoveOrderStatusOrder.receipt_status)}</span>
+                  <span>Created: {formatProfileDate(selectedMoveOrderStatusOrder.created_at)}</span>
+                  {selectedMoveOrderStatusOrder.reviewed_at ? (
+                    <span>Reviewed: {formatProfileDate(selectedMoveOrderStatusOrder.reviewed_at)}</span>
+                  ) : null}
+                </div>
+                <div>{renderMoveOrderWorkflowProgress(selectedMoveOrderStatusOrder)}</div>
+                <div className="user-secondary-cell">
+                  <strong>Notes</strong>
+                  <span>{selectedMoveOrderStatusOrder.reviewed_note || selectedMoveOrderStatusOrder.note || "No note recorded."}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </>
     );
   };
@@ -7436,8 +7619,8 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                           value={moveOrderItemCategoryId}
                           onChange={(event) => setMoveOrderItemCategoryId(event.target.value)}
                         >
-                          <option value="">Select category</option>
-                          {categories.map((category) => (
+                          <option value="">{moveOrderCategories.length === 0 ? "No warehouse category available" : "Select category"}</option>
+                          {moveOrderCategories.map((category) => (
                             <option key={category.id} value={category.id}>
                               {category.name}
                             </option>
@@ -7781,9 +7964,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
           <p className="error-text">{equipmentQrError}</p>
         ) : selectedQrEquipment && equipmentQrImageUrl ? (
           <div className={`qr-card stacked-qr-card${selectedQrAudience === "employee" ? " employee-qr-card" : ""}`}>
-            <div className="qr-preview">
-              <img src={equipmentQrImageUrl} alt={`${selectedQrEquipment.asset_tag} QR code`} />
-            </div>
+            {renderQrPreview(selectedQrEquipment.asset_tag)}
             <div className="qr-details">
               <span className="qr-eyebrow">Employee Device Pass</span>
               <h4>{selectedQrEquipment.equipment_name}</h4>
@@ -8008,9 +8189,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
               <p className="error-text">{equipmentQrError}</p>
             ) : selectedQrEquipment && equipmentQrImageUrl ? (
               <div className="qr-card stacked-qr-card">
-                <div className="qr-preview">
-                  <img src={equipmentQrImageUrl} alt={`${selectedQrEquipment.asset_tag} QR code`} />
-                </div>
+                {renderQrPreview(selectedQrEquipment.asset_tag)}
                 <div className="qr-details">
                   <p>
                     <strong>Company code:</strong> {selectedQrEquipment.asset_tag}
@@ -8285,9 +8464,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                   <p className="error-text">{equipmentQrError}</p>
                 ) : selectedQrEquipment && equipmentQrImageUrl ? (
                   <div className="qr-card stacked-qr-card">
-                    <div className="qr-preview">
-                      <img src={equipmentQrImageUrl} alt={`${selectedQrEquipment.asset_tag} QR code`} />
-                    </div>
+                    {renderQrPreview(selectedQrEquipment.asset_tag)}
                     <div className="qr-details">
                       <p><strong>Company code:</strong> {selectedQrEquipment.asset_tag}</p>
                       <p><strong>Serial number:</strong> {selectedQrEquipment.serial_number}</p>
@@ -8734,9 +8911,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                   <p className="error-text">{equipmentQrError}</p>
                 ) : selectedQrEquipment && equipmentQrImageUrl ? (
                   <div className="qr-card stacked-qr-card">
-                    <div className="qr-preview">
-                      <img src={equipmentQrImageUrl} alt={`${selectedQrEquipment.asset_tag} QR code`} />
-                    </div>
+                    {renderQrPreview(selectedQrEquipment.asset_tag)}
                     <div className="qr-details">
                       <p><strong>Company code:</strong> {selectedQrEquipment.asset_tag}</p>
                       <p><strong>Serial number:</strong> {selectedQrEquipment.serial_number}</p>
@@ -9368,9 +9543,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
               <p className="error-text">{equipmentQrError}</p>
             ) : selectedQrEquipment && equipmentQrImageUrl ? (
               <div className="qr-card stacked-qr-card">
-                <div className="qr-preview">
-                  <img src={equipmentQrImageUrl} alt={`${selectedQrEquipment.asset_tag} QR code`} />
-                </div>
+                {renderQrPreview(selectedQrEquipment.asset_tag)}
                 <div className="qr-details">
                   <p><strong>Company code:</strong> {selectedQrEquipment.asset_tag}</p>
                   <p><strong>Serial number:</strong> {selectedQrEquipment.serial_number}</p>
@@ -10411,9 +10584,9 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
     <section className="dashboard-panel wide-panel">
       <div className="panel-header">
         <div>
-          <h3>Device Monitoring Lab</h3>
+          <h3>Device Monitoring</h3>
           <p className="dashboard-subtitle">
-            Create a sample monitored asset, download the single-file agent bundle, run it on your workstation, and verify live telemetry inside IMS.
+            Track real operational laptops and desktops that are in current stock, assigned to employees, or under maintenance.
           </p>
         </div>
         <div className="panel-header-actions">
@@ -10430,7 +10603,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
           actionLabel="Refresh feed"
           onClick={() => {
             void loadDeviceMonitoringOverview();
-            scrollToMonitoringArea("feed");
+            monitoringFeedRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
           }}
           kicker="Monitoring"
           insight="Assets available in this monitoring lane."
@@ -10439,7 +10612,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
           title="Active Agents"
           value={deviceMonitoringOverview.summary.activeAgents}
           actionLabel="Open feed"
-          onClick={() => scrollToMonitoringArea("feed")}
+          onClick={() => monitoringFeedRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
           kicker="Monitoring"
           insight="Devices that already registered the agent."
         />
@@ -10447,15 +10620,15 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
           title="Online Recently"
           value={deviceMonitoringOverview.summary.onlineRecently}
           actionLabel="Check status"
-          onClick={() => scrollToMonitoringArea("feed")}
+          onClick={() => monitoringFeedRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
           kicker="Monitoring"
-          insight="Seen in the last 15 minutes."
+          insight="Seen in the last 90 seconds."
         />
         <OverviewShortcutCard
           title="Open Alerts"
           value={deviceMonitoringOverview.summary.openAlerts}
-          actionLabel="Inspect setup"
-          onClick={() => scrollToMonitoringArea("quick-start")}
+          actionLabel="Inspect feed"
+          onClick={() => monitoringFeedRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
           kicker="Monitoring"
           insight="Monitoring alerts needing review."
         />
@@ -10463,75 +10636,16 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
 
       <div className="dashboard-bottom-row report-bottom-grid report-single-grid">
         <div className="report-panel">
-          <div className="subpanel-header" ref={monitoringQuickStartRef}>
-            <h4>Quick Start</h4>
-          </div>
-          <div className="simple-form">
-            <label className="field">
-              <span>Sample computer name</span>
-              <input
-                value={sampleDeviceComputerName}
-                onChange={(event) => setSampleDeviceComputerName(event.target.value)}
-                placeholder="Optional, for example ONE-LAPTOP"
-              />
-            </label>
-            <button className="primary-btn form-submit-btn" type="button" onClick={() => void handleCreateSampleMonitoredDevice()} disabled={isCreatingSampleDevice}>
-              {isCreatingSampleDevice ? "Creating..." : "Create sample monitored asset"}
-            </button>
-            <label className="field" style={{ marginTop: "1rem" }}>
-              <span>Asset tag for config</span>
-              <select value={selectedMonitoringAssetTag} onChange={(event) => setSelectedMonitoringAssetTag(event.target.value)}>
-                <option value="">Select monitored asset</option>
-                {deviceMonitoringOverview.records.map((record) => (
-                  <option key={record.assetTag} value={record.assetTag}>
-                    {record.assetTag} / {record.equipmentName}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="table-action-group" style={{ flexWrap: "wrap", marginTop: "0.75rem" }}>
-              <button className="secondary-btn compact-btn" type="button" onClick={() => void handleDownloadMonitoringAsset("AirtelIMSDeviceAgent.exe")}>
-                <Download size={16} />
-                EXE
-              </button>
-              <button className="secondary-btn compact-btn" type="button" onClick={() => void handleDownloadMonitoringAsset("install-agent.ps1")}>
-                <Download size={16} />
-                Installer
-              </button>
-              <button className="secondary-btn compact-btn" type="button" onClick={() => void handleDownloadMonitoringAsset("README.md")}>
-                <Download size={16} />
-                Guide
-              </button>
-              <button className="primary-btn compact-btn" type="button" onClick={() => void handleDownloadMonitoringConfig()}>
-                <Download size={16} />
-                Config
-              </button>
-            </div>
-          </div>
-
-          <div className="mini-list" style={{ marginTop: "1rem" }}>
-            <article className="mini-list-card">
-              <strong>1. Download the EXE and config</strong>
-              <span>Use the EXE for testing on your machine without a Python install.</span>
-            </article>
-            <article className="mini-list-card">
-              <strong>2. Run a quick smoke test</strong>
-              <span>`AirtelIMSDeviceAgent.exe --once --config agent-config-YOURTAG.json`</span>
-            </article>
-            <article className="mini-list-card">
-              <strong>3. Refresh the live feed</strong>
-              <span>Once the device checks in, the latest telemetry and recommendation will appear below.</span>
-            </article>
-          </div>
-        </div>
-      </div>
-
-      <div className="dashboard-bottom-row report-bottom-grid report-single-grid">
-        <div className="report-panel">
           <div className="subpanel-header" ref={monitoringFeedRef}>
             <h4>Live Monitoring Feed</h4>
             <span>{isDeviceMonitoringLoading ? "Refreshing..." : `${deviceMonitoringOverview.records.length} records`}</span>
           </div>
+          {deviceMonitoringError ? (
+            <article className="empty-state-card">
+              <strong>Device monitoring is unavailable right now.</strong>
+              <p>{deviceMonitoringError}</p>
+            </article>
+          ) : null}
           <div className="user-table compact-table">
             <div className="user-table-head">
               <span>Asset</span>
@@ -10539,11 +10653,21 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
               <span>Latest Telemetry</span>
               <span>Recommendation</span>
             </div>
-            {deviceMonitoringOverview.records.map((record) => (
-              <div className="user-table-row" key={record.equipmentId}>
+            {deviceMonitoringOverview.records.map((record) => {
+              const freshness = getMonitoringFreshness(record.latestMetric?.recordedAt || record.agent?.lastSeenAt);
+
+              return (
+              <button
+                className={`user-table-row monitoring-row-button ${selectedMonitoringEquipmentId === record.equipmentId ? "monitoring-row-active" : ""}`}
+                key={record.equipmentId}
+                type="button"
+                onClick={() => {
+                  setSelectedMonitoringEquipmentId(record.equipmentId);
+                }}
+              >
                 <div className="user-primary-cell">
                   <strong>{record.assetTag}</strong>
-                  <span>{record.agent?.hostname || record.computerName || record.equipmentName}</span>
+                  <span>{record.assignedTo?.employeeName || record.agent?.hostname || record.computerName || record.equipmentName}</span>
                 </div>
                 <div className="user-secondary-cell">
                   <strong>
@@ -10551,7 +10675,10 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                       {record.deviceHealth || "unknown"}
                     </span>
                   </strong>
-                  <span>{record.branchName || "No branch"}</span>
+                  <span>
+                    {record.assignedTo?.employeeEmail || record.branchName || "No branch"} • {record.status}
+                  </span>
+                  <span><span className={`status-pill ${freshness.className}`}>{freshness.label}</span></span>
                 </div>
                 <div className="user-secondary-cell">
                   <strong>CPU {record.latestMetric?.cpuUsage ?? 0}% / RAM {record.latestMetric?.ramUsage ?? 0}%</strong>
@@ -10569,10 +10696,171 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                       : "No confidence score yet"}
                   </span>
                 </div>
-              </div>
-            ))}
-            {!deviceMonitoringOverview.records.length ? <p className="loading-text">No monitored assets yet. Create one and run the agent to start testing.</p> : null}
+              </button>
+              );
+            })}
+            {!deviceMonitoringOverview.records.length ? <p className="loading-text">No operational monitored computers are visible yet.</p> : null}
           </div>
+        </div>
+      </div>
+
+      <div className="dashboard-bottom-row report-bottom-grid report-single-grid">
+        <div className="report-panel">
+          <div className="subpanel-header">
+            <h4>Device Detail</h4>
+            <span>{isMonitoringDetailLoading ? "Loading..." : selectedMonitoringDetail.assetTag || "Select a device"}</span>
+          </div>
+          {!selectedMonitoringEquipmentId ? (
+            <p className="loading-text">Click any device in the monitoring table to read more about how it is being used in the system.</p>
+          ) : (
+            <>
+              {monitoringDetailError ? (
+                <article className="empty-state-card" style={{ marginBottom: "1rem" }}>
+                  <strong>Device details could not be loaded.</strong>
+                  <p>{monitoringDetailError}</p>
+                </article>
+              ) : null}
+            <div className="mini-list monitoring-detail-grid">
+              <article className="mini-list-card">
+                <strong>{selectedMonitoringDetail.assetTag || "Device"}</strong>
+                <span>{selectedMonitoringDetail.computerName || selectedMonitoringDetail.equipmentName}</span>
+                <span>{selectedMonitoringDetail.branchName || "No branch"} • {selectedMonitoringDetail.status || "unknown status"}</span>
+              </article>
+              <article className="mini-list-card">
+                <strong>Current usage</strong>
+                <span>
+                  {selectedMonitoringDetail.assignedTo
+                    ? `${selectedMonitoringDetail.assignedTo.employeeName} (${selectedMonitoringDetail.assignedTo.employeeEmail})`
+                    : "Not actively assigned"}
+                </span>
+                <span>
+                  {selectedMonitoringDetail.assignedTo?.assignedAt
+                    ? `Assigned ${new Date(selectedMonitoringDetail.assignedTo.assignedAt).toLocaleString()}`
+                    : "Available in current stock workflow"}
+                </span>
+              </article>
+              <article className="mini-list-card">
+                <strong>Agent status</strong>
+                <span>
+                  {selectedMonitoringDetail.agent
+                    ? `${selectedMonitoringDetail.agent.hostname} • ${selectedMonitoringDetail.agent.operatingSystem || "OS unknown"}`
+                    : "Agent has not checked in yet"}
+                </span>
+                <span>
+                  {selectedMonitoringDetail.agent?.lastSeenAt
+                    ? `Last seen ${new Date(selectedMonitoringDetail.agent.lastSeenAt).toLocaleString()}`
+                    : "No last-seen timestamp yet"}
+                </span>
+              </article>
+              <article className="mini-list-card">
+                <strong>Telemetry snapshot</strong>
+                <span>
+                  {selectedMonitoringDetail.latestMetric
+                    ? `CPU ${selectedMonitoringDetail.latestMetric.cpuUsage}% • RAM ${selectedMonitoringDetail.latestMetric.ramUsage}% • Disk ${selectedMonitoringDetail.latestMetric.diskUsage}%`
+                    : "No telemetry uploaded yet"}
+                </span>
+                <span>
+                  {selectedMonitoringDetail.latestMetric?.recordedAt
+                    ? `Captured ${new Date(selectedMonitoringDetail.latestMetric.recordedAt).toLocaleString()}`
+                    : "Waiting for the first telemetry sample"}
+                </span>
+              </article>
+              <article className="mini-list-card">
+                <strong>Recent telemetry history</strong>
+                <span>
+                  {(selectedMonitoringDetail.recentMetrics ?? []).length > 0
+                    ? (selectedMonitoringDetail.recentMetrics ?? [])
+                        .slice(0, 4)
+                        .map((metric) => `CPU ${metric.cpuUsage}% / RAM ${metric.ramUsage}% / Disk ${metric.diskUsage}%`)
+                        .join(" | ")
+                    : "No recent telemetry history yet"}
+                </span>
+                <span>
+                  {(selectedMonitoringDetail.recentMetrics ?? []).length > 0
+                    ? (selectedMonitoringDetail.recentMetrics ?? [])
+                        .slice(0, 4)
+                        .map((metric) => new Date(metric.recordedAt || "").toLocaleTimeString())
+                        .join(" • ")
+                    : "Run the agent for a few cycles to build history"}
+                </span>
+              </article>
+              <article className="mini-list-card monitoring-telemetry-card">
+                <div className="monitoring-telemetry-head">
+                  <strong>Latest Telemetry</strong>
+                  <span>{selectedMonitoringDetail.assetTag || "Selected device"}</span>
+                </div>
+                {monitoringTelemetryHistory.length === 0 ? (
+                  <span>No telemetry history is available yet for this device.</span>
+                ) : (
+                  <>
+                    <div className="monitoring-telemetry-legend" aria-label="Telemetry legend">
+                      {monitoringTelemetrySeries.map((series) => (
+                        <span className="monitoring-legend-item" key={`legend-${series.key}`}>
+                          <i className={`monitoring-legend-swatch ${series.key}`} />
+                          {series.label} {series.values.length > 0 ? `${Math.round(series.values[series.values.length - 1] ?? 0)}${series.unit}` : ""}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="monitoring-telemetry-chart-shell">
+                      <div className="monitoring-telemetry-y-axis" aria-hidden="true">
+                        {[100, 80, 60, 40, 20, 0].map((value) => (
+                          <span key={`telemetry-y-${value}`}>{value}</span>
+                        ))}
+                      </div>
+                      <div className="monitoring-telemetry-chart">
+                        <svg className="monitoring-telemetry-svg" viewBox="0 0 1000 220" preserveAspectRatio="none" aria-hidden="true">
+                          {[0, 20, 40, 60, 80, 100].map((value) => {
+                            const y = 202 - (value / 100) * 184;
+                            return <path key={`grid-${value}`} className="monitoring-telemetry-gridline" d={`M28 ${y} H972`} />;
+                          })}
+                          {monitoringTelemetrySeries.map((series) => (
+                            <path
+                              key={`series-${series.key}`}
+                              className={`monitoring-telemetry-line ${series.key}`}
+                              d={buildTelemetryCurve(series.values)}
+                            />
+                          ))}
+                        </svg>
+                        <div className="monitoring-telemetry-x-axis">
+                          {monitoringTelemetryHistory.map((metric) => (
+                            <span key={`telemetry-x-${metric.id}`}>
+                              {new Date(metric.recordedAt || "").toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </article>
+              <article className="mini-list-card">
+                <strong>Recommendation</strong>
+                <span>{selectedMonitoringDetail.recommendation?.label || "No recommendation yet"}</span>
+                <span>
+                  {selectedMonitoringDetail.recommendation?.confidenceScore !== null && selectedMonitoringDetail.recommendation?.confidenceScore !== undefined
+                    ? `Confidence ${selectedMonitoringDetail.recommendation.confidenceScore}%`
+                    : "Model confidence not available yet"}
+                </span>
+              </article>
+              <article className="mini-list-card">
+                <strong>Recent alerts</strong>
+                <span>{selectedMonitoringDetail.recentAlerts?.[0]?.message || "No recent alerts recorded."}</span>
+                <span>
+                  {selectedMonitoringDetail.recentAlerts?.[0]?.createdAt
+                    ? `Logged ${new Date(selectedMonitoringDetail.recentAlerts[0].createdAt).toLocaleString()}`
+                    : "Healthy devices may not generate alerts"}
+                </span>
+              </article>
+              {(selectedMonitoringDetail.usageSummary ?? []).map((item, index) => (
+                <article className="mini-list-card" key={`${selectedMonitoringDetail.equipmentId}-usage-${index}`}>
+                  <strong>{item.title}</strong>
+                  <span>{item.subtitle}</span>
+                  <span>{item.meta}</span>
+                </article>
+              ))}
+            </div>
+            </>
+          )}
         </div>
       </div>
     </section>
@@ -10706,9 +10994,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                 <p className="error-text">{equipmentQrError}</p>
               ) : selectedQrEquipment && equipmentQrImageUrl && selectedQrEquipment.id === selectedDetailPanel.qrEquipment.id ? (
                 <div className={`qr-card stacked-qr-card${selectedQrAudience === "employee" ? " employee-qr-card" : ""}`}>
-                  <div className="qr-preview">
-                    <img src={equipmentQrImageUrl} alt={`${selectedQrEquipment.asset_tag} QR code`} />
-                  </div>
+                  {renderQrPreview(selectedQrEquipment.asset_tag)}
                   <div className="qr-details">
                     <h4>{selectedQrEquipment.equipment_name}</h4>
                     <p><strong>Company code:</strong> {selectedQrEquipment.asset_tag}</p>
@@ -10730,6 +11016,55 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
         </aside>
       </div>
     ) : null;
+
+  const renderRequestContextModal = () => {
+    if (!selectedRequestContextRequest) {
+      return null;
+    }
+
+    const request = selectedRequestContextRequest;
+    const hrmsSnapshot = parseHrmsSnapshot(request.hrms_snapshot);
+    const employeeName = request.target_employee_name || hrmsSnapshot.employeeName;
+    const employeeRole = request.target_employee_job_title || hrmsSnapshot.jobTitle || request.target_employee_role_name || hrmsSnapshot.roleName;
+    const employeeHrmsId = request.target_employee_hrms_employee_id || hrmsSnapshot.hrmsEmployeeId;
+    const employeeCode = request.target_employee_code || hrmsSnapshot.employeeCode;
+    const employeeGrade = request.target_employee_grade || hrmsSnapshot.employeeGrade;
+    const employeeLocation = request.target_employee_office_location || hrmsSnapshot.officeLocation;
+    const employeeEmploymentStatus = request.target_employee_employment_status || hrmsSnapshot.employmentStatus;
+    const employeeStartDate = request.target_employee_start_date || hrmsSnapshot.startDate;
+    const recommendedDeviceProfile = hrmsSnapshot.recommendedDeviceProfile;
+
+    return (
+      <div className="hr-modal-overlay" role="presentation" onClick={() => setSelectedRequestContextRequest(null)}>
+        <div
+          className="hr-modal-card"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="request-context-modal-title"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="panel-header">
+            <div>
+              <h3 id="request-context-modal-title">{employeeName || "Employee context"}</h3>
+              <p className="dashboard-subtitle">Request {request.id} / {(request.request_type || "standard").replace("_", " ")}</p>
+            </div>
+            <button className="secondary-btn compact-btn" type="button" onClick={() => setSelectedRequestContextRequest(null)}>
+              Close
+            </button>
+          </div>
+          <div className="workflow-table-stack">
+            <div className="user-secondary-cell">
+              <strong>{request.target_employee_email || hrmsSnapshot.employeeEmail || "No email"}</strong>
+              <span>{employeeRole || "No role captured"} / {request.target_employee_department_name || "No department captured"}</span>
+              <span>{employeeHrmsId || "No HRMS id"} / {employeeCode || "No employee code"} / {employeeGrade || "No employee grade"}</span>
+              <span>{employeeLocation || "No office location"} / {employeeEmploymentStatus || "No employment status"} / Start {formatProfileDate(employeeStartDate)}</span>
+              <span>{recommendedDeviceProfile || "No predicted device profile was generated yet."}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className={`app-dashboard-shell ${isSidebarOpen ? "sidebar-open" : "sidebar-collapsed"}`}>
@@ -11026,6 +11361,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
         ) : null}
       </div>
       {renderDetailPanel()}
+      {renderRequestContextModal()}
     </div>
   );
 }

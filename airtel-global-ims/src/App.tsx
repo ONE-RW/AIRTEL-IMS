@@ -9,6 +9,7 @@ import WarehouseDashboardPage from "./pages/WarehouseDashboardPage";
 import EmployeeDashboardPage from "./pages/EmployeeDashboardPage";
 import HRDirectorDashboard from "./pages/HRDirectorDashboard";
 import AiChatAssistant from "./components/AiChatAssistant";
+import AppInstallBanner from "./components/AppInstallBanner";
 import { fetchJson, getApiMessage } from "./api";
 import { API_BASE_URL } from "./config";
 import type { LoggedInUser } from "./types";
@@ -406,6 +407,7 @@ function App() {
   return (
     <>
       {dashboardView}
+      <AppInstallBanner />
       <AiChatAssistant user={user} />
       {user.mustChangePassword ? (
         <div className="session-warning-overlay" role="presentation">

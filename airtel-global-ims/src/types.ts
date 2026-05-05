@@ -201,10 +201,15 @@ export type DeviceMonitoringRecord = {
   equipmentId: number;
   assetTag: string;
   equipmentName: string;
+  categoryName: string | null;
   computerName: string | null;
   branchName: string | null;
   status: string;
   deviceHealth: string | null;
+  assignedTo: {
+    employeeName: string;
+    employeeEmail: string | null;
+  } | null;
   agent: {
     hostname: string;
     operatingSystem: string | null;
@@ -232,6 +237,70 @@ export type DeviceMonitoringRecord = {
   } | null;
 };
 
+export type DeviceMonitoringDetail = {
+  equipmentId: number;
+  assetTag: string;
+  equipmentName: string;
+  categoryName: string | null;
+  computerName: string | null;
+  branchName: string | null;
+  status: string;
+  deviceHealth: string | null;
+  assignedTo: {
+    employeeName: string;
+    employeeEmail: string;
+    assignedAt: string | null;
+    officeLocation: string | null;
+  } | null;
+  agent: {
+    hostname: string;
+    operatingSystem: string | null;
+    version: string | null;
+    lastSeenAt: string | null;
+  } | null;
+  latestMetric: {
+    cpuUsage: number;
+    ramUsage: number;
+    diskUsage: number;
+    diskHealth: number | null;
+    batteryHealth: number | null;
+    batteryLevel: number | null;
+    networkLatency: number | null;
+    packetLoss: number | null;
+    temperature: number | null;
+    uptimeSeconds: number;
+    workloadIntensity: number | null;
+    errorCount: number;
+    recordedAt: string | null;
+  } | null;
+  recentMetrics: Array<{
+    id: number;
+    cpuUsage: number;
+    ramUsage: number;
+    diskUsage: number;
+    temperature: number | null;
+    recordedAt: string | null;
+  }>;
+  recommendation: {
+    label: string;
+    confidenceScore: number | null;
+    modelVersion: string | null;
+    generatedAt: string | null;
+  } | null;
+  recentAlerts: Array<{
+    alertType: string;
+    severity: string;
+    status: string;
+    message: string;
+    createdAt: string;
+  }>;
+  usageSummary: Array<{
+    title: string;
+    subtitle: string;
+    meta: string;
+  }>;
+};
+
 export type DeviceMonitoringOverview = {
   generatedAt: string;
   summary: {
@@ -239,6 +308,13 @@ export type DeviceMonitoringOverview = {
     activeAgents: number;
     onlineRecently: number;
     openAlerts: number;
+  };
+  deployment: {
+    apiUrl: string;
+    installDirectory: string;
+    startupMode: string;
+    smokeTestCommand: string;
+    installExampleCommand: string;
   };
   records: DeviceMonitoringRecord[];
 };

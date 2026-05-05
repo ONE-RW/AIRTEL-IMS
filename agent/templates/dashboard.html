@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Device Health Agent — Fleet Dashboard</title>
+<style>
+  /* ── Reset & base ───────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #f0f2f7;
+    --card:     #ffffff;
+    --border:   #e2e6ef;
+    --text:     #111827;
+    --muted:    #6b7280;
+    --accent:   #2563eb;
+    --green:    #16a34a; --green-bg: #dcfce7;
+    --amber:    #d97706; --amber-bg: #fef3c7;
+    --red:      #dc2626; --red-bg:   #fee2e2;
+    --blue-bg:  #eff6ff;
+    --radius:   14px;
+    --font:     'Inter', system-ui, sans-serif;
+  }
+
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  /* ── Sidebar ────────────────────────────── */
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; width: 220px;
+    background: var(--card); border-right: 1px solid var(--border);
+    padding: 24px 16px; display: flex; flex-direction: column; gap: 6px;
+    z-index: 100;
+  }
+  .sidebar-logo {
+    display: flex; align-items: center; gap: 10px;
+    font-weight: 700; font-size: 15px; margin-bottom: 20px; color: var(--accent);
+  }
+  .logo-icon {
+    width: 34px; height: 34px; border-radius: 10px; background: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .logo-icon svg { stroke: white; }
+  .nav-item {
+    display: flex; align-items: center; gap: 9px;
+    padding: 9px 12px; border-radius: 10px; font-size: 13.5px;
+    color: var(--muted); cursor: pointer; text-decoration: none;
+    transition: background 0.15s, color 0.15s;
+  }
+  .nav-item:hover { background: var(--bg); color: var(--text); }
+  .nav-item.active { background: var(--blue-bg); color: var(--accent); font-weight: 600; }
+  .nav-section { font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted); padding: 16px 12px 6px; }
+
+  /* ── Main layout ────────────────────────── */
+  .main { margin-left: 220px; padding: 28px 32px; }
+
+  /* ── Top bar ────────────────────────────── */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 28px; flex-wrap: wrap; gap: 12px;
+  }
+  .topbar h1 { font-size: 22px; font-weight: 700; }
+  .topbar-right { display: flex; align-items: center; gap: 10px; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 12px; font-weight: 600; padding: 4px 12px;
+    border-radius: 99px;
+  }
+  .badge-green  { background: var(--green-bg); color: var(--green); }
+  .badge-amber  { background: var(--amber-bg); color: var(--amber); }
+  .badge-red    { background: var(--red-bg);   color: var(--red); }
+  .badge-blue   { background: var(--blue-bg);  color: var(--accent); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .dot-live { background: var(--green); animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 18px; border-radius: 10px; font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: all 0.15s; border: none;
+  }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-primary:hover { background: #1d4ed8; transform: translateY(-1px); }
+  .btn-outline { background: white; color: var(--text); border: 1px solid var(--border); }
+  .btn-outline:hover { background: var(--bg); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; transform: none !important; }
+
+  /* ── Metric cards ───────────────────────── */
+  .metrics-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 28px;
+  }
+  .metric-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px;
+  }
+  .metric-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .05em; }
+  .metric-value { font-size: 32px; font-weight: 700; }
+  .metric-sub   { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .v-green { color: var(--green); }
+  .v-amber { color: var(--amber); }
+  .v-red   { color: var(--red); }
+  .v-blue  { color: var(--accent); }
+
+  /* ── Device grid ────────────────────────── */
+  .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .section-title { font-size: 15px; font-weight: 700; }
+  .device-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; margin-bottom: 28px;
+  }
+  .device-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 18px; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s;
+    position: relative; overflow: hidden;
+  }
+  .device-card::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  }
+  .device-card.healthy::before { background: var(--green); }
+  .device-card.risk::before    { background: var(--amber); }
+  .device-card.fail::before    { background: var(--red); }
+  .device-card:hover { border-color: var(--accent); box-shadow: 0 4px 18px rgba(37,99,235,.1); }
+  .device-card.selected { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(37,99,235,.15); }
+
+  .device-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; }
+  .device-icon { font-size: 24px; }
+  .device-status-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 4px; }
+  .device-name   { font-size: 14px; font-weight: 700; margin-bottom: 2px; }
+  .device-meta   { font-size: 11px; color: var(--muted); }
+  .device-location { font-size: 11px; color: var(--muted); margin-bottom: 12px; display: flex; align-items: center; gap: 4px; }
+
+  .bars { display: flex; flex-direction: column; gap: 7px; margin-bottom: 12px; }
+  .bar-row { display: flex; align-items: center; gap: 8px; }
+  .bar-lbl { font-size: 10px; color: var(--muted); width: 32px; flex-shrink: 0; }
+  .bar-track { flex: 1; height: 5px; background: var(--bg); border-radius: 3px; overflow: hidden; }
+  .bar-fill  { height: 100%; border-radius: 3px; transition: width .6s ease; }
+  .bar-val   { font-size: 10px; color: var(--muted); width: 34px; text-align: right; flex-shrink: 0; }
+
+  .device-footer { display: flex; align-items: center; justify-content: space-between; }
+  .status-pill {
+    font-size: 11px; font-weight: 600; padding: 3px 10px;
+    border-radius: 99px; display: inline-flex; align-items: center; gap: 4px;
+  }
+  .confidence-text { font-size: 10px; color: var(--muted); }
+
+  /* ── Detail panel ───────────────────────── */
+  .detail-panel {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 24px; margin-bottom: 28px; display: none;
+  }
+  .detail-panel.visible { display: block; }
+  .detail-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 10px; }
+  .detail-title  { font-size: 18px; font-weight: 700; }
+  .detail-grid   { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px; }
+  .detail-metric { background: var(--bg); border-radius: 10px; padding: 14px; }
+  .detail-metric .lbl { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  .detail-metric .val { font-size: 20px; font-weight: 700; }
+  .ai-summary { background: var(--blue-bg); border-left: 4px solid var(--accent); border-radius: 0 10px 10px 0; padding: 14px 16px; font-size: 13.5px; line-height: 1.7; color: var(--text); }
+  .history-chart { height: 180px; position: relative; margin-top: 20px; }
+
+  /* ── Daily report ───────────────────────── */
+  .report-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 24px; margin-bottom: 28px;
+  }
+  .report-body { font-size: 14px; line-height: 1.8; color: var(--text); white-space: pre-wrap; }
+
+  /* ── Log ────────────────────────────────── */
+  .log-card {
+    background: #0f172a; border-radius: var(--radius); padding: 18px;
+  }
+  .log-line { font-family: 'Fira Code', monospace; font-size: 11.5px; margin-bottom: 5px; display: flex; gap: 12px; }
+  .log-time  { color: #475569; flex-shrink: 0; }
+  .log-ok    { color: #4ade80; }
+  .log-warn  { color: #fbbf24; }
+  .log-err   { color: #f87171; }
+  .log-info  { color: #94a3b8; }
+
+  /* ── Spinner ────────────────────────────── */
+  .spinner {
+    display: inline-block; width: 14px; height: 14px;
+    border: 2px solid rgba(0,0,0,.1); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Toast ──────────────────────────────── */
+  .toast {
+    position: fixed; bottom: 24px; right: 24px;
+    background: #1e293b; color: white; padding: 12px 20px;
+    border-radius: 10px; font-size: 13px; z-index: 999;
+    opacity: 0; transition: opacity .3s; pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+
+  /* ── Empty state ────────────────────────── */
+  .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+  .empty svg { margin-bottom: 14px; opacity: .3; }
+  .empty p { font-size: 14px; }
+
+  @media (max-width: 900px) {
+    .sidebar { display: none; }
+    .main { margin-left: 0; padding: 16px; }
+    .metrics-grid { grid-template-columns: repeat(2, 1fr); }
+    .detail-grid  { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Fira+Code&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+</head>
+<body>
+
+<!-- Sidebar -->
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+    </div>
+    Health Agent
+  </div>
+  <span class="nav-section">Monitor</span>
+  <a class="nav-item active" onclick="showView('fleet')">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+    Fleet overview
+  </a>
+  <a class="nav-item" onclick="showView('report')">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+    Daily report
+  </a>
+  <span class="nav-section">System</span>
+  <a class="nav-item" onclick="showView('log')">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h7"/></svg>
+    Activity log
+  </a>
+</nav>
+
+<!-- Main -->
+<div class="main">
+
+  <!-- FLEET VIEW -->
+  <div id="view-fleet">
+    <div class="topbar">
+      <div>
+        <h1>Fleet Dashboard</h1>
+        <div style="font-size:13px;color:var(--muted);margin-top:2px;" id="last-updated">Loading…</div>
+      </div>
+      <div class="topbar-right">
+        <span class="badge badge-green" id="live-badge">
+          <span class="dot dot-live"></span> Live
+        </span>
+        <button class="btn btn-primary" id="scan-btn" onclick="scanAll()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+          Scan fleet
+        </button>
+      </div>
+    </div>
+
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-label">Total devices</div>
+        <div class="metric-value v-blue" id="m-total">—</div>
+        <div class="metric-sub">Connected agents</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Healthy</div>
+        <div class="metric-value v-green" id="m-healthy">—</div>
+        <div class="metric-sub">Operating normally</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">At risk</div>
+        <div class="metric-value v-amber" id="m-risk">—</div>
+        <div class="metric-sub">Needs attention</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Critical</div>
+        <div class="metric-value v-red" id="m-fail">—</div>
+        <div class="metric-sub">Immediate action</div>
+      </div>
+    </div>
+
+    <!-- Detail panel (shown when a device is selected) -->
+    <div class="detail-panel" id="detail-panel">
+      <div class="detail-header">
+        <div>
+          <div class="detail-title" id="d-title">Device detail</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px;" id="d-meta"></div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span class="status-pill" id="d-status-pill"></span>
+          <button class="btn btn-outline" style="font-size:12px;padding:6px 14px;" onclick="closeDetail()">Close</button>
+        </div>
+      </div>
+      <div class="detail-grid" id="d-metrics"></div>
+      <div class="ai-summary" id="d-summary">Loading AI analysis…</div>
+      <div class="history-chart">
+        <canvas id="history-chart" role="img" aria-label="Device metric history chart"></canvas>
+      </div>
+    </div>
+
+    <div class="section-header">
+      <div class="section-title">Device fleet</div>
+      <div style="display:flex;gap:8px;">
+        <select id="filter-status" onchange="renderDevices()" style="font-size:12px;padding:6px 12px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text);">
+          <option value="all">All statuses</option>
+          <option value="healthy">Healthy</option>
+          <option value="risk">At risk</option>
+          <option value="fail">Critical</option>
+        </select>
+        <select id="filter-location" onchange="renderDevices()" style="font-size:12px;padding:6px 12px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text);">
+          <option value="all">All locations</option>
+        </select>
+      </div>
+    </div>
+    <div class="device-grid" id="device-grid">
+      <div class="empty" style="grid-column:1/-1;">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        <p>No devices yet. Run <strong>Scan fleet</strong> or wait for agents to send data.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- REPORT VIEW -->
+  <div id="view-report" style="display:none;">
+    <div class="topbar">
+      <h1>Daily Health Report</h1>
+      <button class="btn btn-primary" id="report-btn" onclick="fetchReport()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 4v5h5M20 20v-5h-5"/><path d="M4 9a8 8 0 0 1 14.9-2M20 15a8 8 0 0 1-14.9 2"/></svg>
+        Generate report
+      </button>
+    </div>
+    <div class="report-card">
+      <div class="report-body" id="report-body">Click "Generate report" to create an AI-written fleet health summary.</div>
+    </div>
+  </div>
+
+  <!-- LOG VIEW -->
+  <div id="view-log" style="display:none;">
+    <div class="topbar">
+      <h1>Activity Log</h1>
+      <button class="btn btn-outline" onclick="clearLog()">Clear</button>
+    </div>
+    <div class="log-card" id="log-panel" style="max-height:600px;overflow-y:auto;"></div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── Config ───────────────────────────────────────────────────────
+const API_KEY = "changeme-secret-key";  // Must match server
+const API_BASE = "";                     // Same origin — empty string = relative URL
+const AUTO_REFRESH_MS = 30000;           // 30 seconds
+
+// ── State ────────────────────────────────────────────────────────
+let devices = [];
+let selectedDeviceId = null;
+let historyChart = null;
+let refreshTimer = null;
+
+// ── View routing ─────────────────────────────────────────────────
+function showView(name) {
+  ['fleet','report','log'].forEach(v => {
+    document.getElementById('view-' + v).style.display = v === name ? '' : 'none';
+  });
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  event.currentTarget && event.currentTarget.classList.add('active');
+}
+
+// ── API helpers ──────────────────────────────────────────────────
+async function apiFetch(path, opts = {}) {
+  const res = await fetch(API_BASE + path, {
+    ...opts,
+    headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json', ...(opts.headers || {}) }
+  });
+  return res.json();
+}
+
+// ── Logging ──────────────────────────────────────────────────────
+function log(msg, type = 'info') {
+  const panel = document.getElementById('log-panel');
+  const line = document.createElement('div');
+  line.className = 'log-line';
+  line.innerHTML = `<span class="log-time">${new Date().toLocaleTimeString()}</span><span class="log-${type}">${msg}</span>`;
+  panel.prepend(line);
+}
+function clearLog() { document.getElementById('log-panel').innerHTML = ''; }
+
+// ── Toast ────────────────────────────────────────────────────────
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2800);
+}
+
+// ── Load devices from server ─────────────────────────────────────
+async function loadDevices() {
+  try {
+    const data = await apiFetch('/api/devices/latest');
+    devices = data;
+    updateMetrics();
+    renderDevices();
+    populateLocationFilter();
+    document.getElementById('last-updated').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+    log(`Loaded ${devices.length} device(s) from server`, 'ok');
+  } catch (e) {
+    log('Failed to load devices: ' + e.message, 'err');
+  }
+}
+
+// ── Scan all (request AI predictions for each) ───────────────────
+async function scanAll() {
+  const btn = document.getElementById('scan-btn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Scanning…';
+  log('Agent scan started for all devices…', 'ok');
+  await loadDevices();
+  for (const d of devices) {
+    log(`Requesting AI prediction for ${d.device_name}…`);
+    try {
+      await apiFetch(`/api/devices/${encodeURIComponent(d.device_id)}/predict`, { method: 'POST' });
+      log(`${d.device_name} → prediction complete`, 'ok');
+    } catch(e) {
+      log(`${d.device_name} → prediction error: ${e.message}`, 'err');
+    }
+  }
+  await loadDevices();
+  btn.disabled = false;
+  btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Scan fleet';
+  toast('Scan complete');
+  log('Fleet scan complete', 'ok');
+}
+
+// ── Metrics row ──────────────────────────────────────────────────
+function updateMetrics() {
+  document.getElementById('m-total').textContent   = devices.length;
+  document.getElementById('m-healthy').textContent = devices.filter(d => d.ai_status === 'healthy').length;
+  document.getElementById('m-risk').textContent    = devices.filter(d => d.ai_status === 'risk').length;
+  document.getElementById('m-fail').textContent    = devices.filter(d => d.ai_status === 'fail').length;
+}
+
+// ── Location filter ──────────────────────────────────────────────
+function populateLocationFilter() {
+  const sel = document.getElementById('filter-location');
+  const locs = [...new Set(devices.map(d => d.location))].filter(Boolean);
+  sel.innerHTML = '<option value="all">All locations</option>' +
+    locs.map(l => `<option value="${l}">${l}</option>`).join('');
+}
+
+// ── Colour helpers ───────────────────────────────────────────────
+function barColor(val) {
+  if (val > 80) return '#dc2626';
+  if (val > 60) return '#d97706';
+  return '#16a34a';
+}
+function statusStyle(s) {
+  if (s === 'healthy') return { pill: 'background:#dcfce7;color:#16a34a', dot: '#16a34a' };
+  if (s === 'risk')    return { pill: 'background:#fef3c7;color:#d97706', dot: '#d97706' };
+  if (s === 'fail')    return { pill: 'background:#fee2e2;color:#dc2626', dot: '#dc2626' };
+  return { pill: 'background:#f3f4f6;color:#6b7280', dot: '#9ca3af' };
+}
+function deviceIcon(platform) {
+  const p = (platform || '').toLowerCase();
+  if (p.includes('windows')) return '🪟';
+  if (p.includes('linux'))   return '🐧';
+  if (p.includes('darwin') || p.includes('mac')) return '🍎';
+  return '🖥';
+}
+
+// ── Render device grid ───────────────────────────────────────────
+function renderDevices() {
+  const statusFilter   = document.getElementById('filter-status').value;
+  const locationFilter = document.getElementById('filter-location').value;
+  let filtered = devices;
+  if (statusFilter !== 'all')   filtered = filtered.filter(d => d.ai_status === statusFilter);
+  if (locationFilter !== 'all') filtered = filtered.filter(d => d.location === locationFilter);
+
+  const grid = document.getElementById('device-grid');
+  if (!filtered.length) {
+    grid.innerHTML = '<div class="empty" style="grid-column:1/-1;"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg><p>No devices match the filter.</p></div>';
+    return;
+  }
+
+  grid.innerHTML = filtered.map(d => {
+    const st  = statusStyle(d.ai_status);
+    const sel = selectedDeviceId === d.device_id ? ' selected' : '';
+    const cls = d.ai_status || '';
+    const lastSeen = d.timestamp ? new Date(d.timestamp).toLocaleTimeString() : 'never';
+    return `
+    <div class="device-card ${cls}${sel}" onclick="selectDevice('${d.device_id}')">
+      <div class="device-header">
+        <div class="device-icon">${deviceIcon(d.platform)}</div>
+        <div class="device-status-dot" style="background:${st.dot};"></div>
+      </div>
+      <div class="device-name">${d.device_name}</div>
+      <div class="device-meta">${d.platform || ''} · ${d.ip_address || ''}</div>
+      <div class="device-location">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+        ${d.location || 'Unknown'}
+      </div>
+      <div class="bars">
+        <div class="bar-row">
+          <span class="bar-lbl">CPU</span>
+          <div class="bar-track"><div class="bar-fill" style="width:${d.cpu||0}%;background:${barColor(d.cpu||0)};"></div></div>
+          <span class="bar-val">${Math.round(d.cpu||0)}%</span>
+        </div>
+        <div class="bar-row">
+          <span class="bar-lbl">MEM</span>
+          <div class="bar-track"><div class="bar-fill" style="width:${d.memory||0}%;background:${barColor(d.memory||0)};"></div></div>
+          <span class="bar-val">${Math.round(d.memory||0)}%</span>
+        </div>
+        <div class="bar-row">
+          <span class="bar-lbl">TEMP</span>
+          <div class="bar-track"><div class="bar-fill" style="width:${Math.min(d.temperature||0,100)}%;background:${barColor(d.temperature||0)};"></div></div>
+          <span class="bar-val">${Math.round(d.temperature||0)}°C</span>
+        </div>
+      </div>
+      <div class="device-footer">
+        <span class="status-pill" style="${st.pill}">
+          ${d.ai_status === 'healthy' ? 'Healthy' : d.ai_status === 'risk' ? 'At risk' : d.ai_status === 'fail' ? 'Critical' : 'Pending'}
+        </span>
+        <span class="confidence-text">${d.ai_confidence ? Math.round(d.ai_confidence) + '% conf.' : ''}</span>
+      </div>
+      <div style="font-size:10px;color:var(--muted);margin-top:8px;">Last seen ${lastSeen}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── Device detail panel ──────────────────────────────────────────
+async function selectDevice(deviceId) {
+  selectedDeviceId = deviceId;
+  renderDevices();
+  const d = devices.find(x => x.device_id === deviceId);
+  if (!d) return;
+
+  const panel = document.getElementById('detail-panel');
+  panel.classList.add('visible');
+  panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  const st = statusStyle(d.ai_status);
+  document.getElementById('d-title').textContent = `${deviceIcon(d.platform)} ${d.device_name}`;
+  document.getElementById('d-meta').textContent  = `${d.platform} · ${d.ip_address} · ${d.location}`;
+  document.getElementById('d-status-pill').textContent = d.ai_status || 'Unknown';
+  document.getElementById('d-status-pill').setAttribute('style', st.pill + ';padding:4px 12px;border-radius:99px;font-size:12px;font-weight:600;');
+  document.getElementById('d-summary').textContent = d.ai_summary || 'No AI analysis yet. Click "Scan fleet" to run predictions.';
+
+  document.getElementById('d-metrics').innerHTML = [
+    ['CPU', (d.cpu||0).toFixed(1) + '%'],
+    ['Memory', (d.memory||0).toFixed(1) + '%'],
+    ['Battery', (d.battery||0).toFixed(1) + '%'],
+    ['Latency', (d.latency||0).toFixed(0) + ' ms'],
+    ['Pkt loss', (d.packet_loss||0).toFixed(1) + '%'],
+    ['Temp', (d.temperature||0).toFixed(1) + '°C'],
+    ['Uptime', (d.uptime||0).toFixed(1) + ' h'],
+    ['Workload', (d.workload||0) + '/10'],
+    ['Errors', (d.errors||0)],
+  ].map(([l,v]) => `
+    <div class="detail-metric">
+      <div class="lbl">${l}</div>
+      <div class="val">${v}</div>
+    </div>`).join('');
+
+  // Load history chart
+  try {
+    const history = await apiFetch(`/api/devices/${encodeURIComponent(deviceId)}/history?limit=20`);
+    renderHistoryChart(history.reverse());
+  } catch(e) {
+    log('History load error: ' + e.message, 'warn');
+  }
+}
+
+function closeDetail() {
+  selectedDeviceId = null;
+  document.getElementById('detail-panel').classList.remove('visible');
+  renderDevices();
+}
+
+function renderHistoryChart(history) {
+  const ctx = document.getElementById('history-chart');
+  if (historyChart) historyChart.destroy();
+  historyChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: history.map(r => new Date(r.timestamp).toLocaleTimeString()),
+      datasets: [
+        { label: 'CPU %',    data: history.map(r => r.cpu),    borderColor: '#2563eb', tension: .4, fill: false, pointRadius: 2 },
+        { label: 'Memory %', data: history.map(r => r.memory), borderColor: '#16a34a', tension: .4, fill: false, pointRadius: 2 },
+        { label: 'Temp °C',  data: history.map(r => r.temperature), borderColor: '#d97706', tension: .4, fill: false, pointRadius: 2 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { font: { size: 11 }, boxWidth: 12 } } },
+      scales: {
+        x: { ticks: { font: { size: 10 }, maxTicksLimit: 8 } },
+        y: { ticks: { font: { size: 10 } } }
+      }
+    }
+  });
+}
+
+// ── Daily report ─────────────────────────────────────────────────
+async function fetchReport() {
+  const btn  = document.getElementById('report-btn');
+  const body = document.getElementById('report-body');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Generating…';
+  body.textContent = 'Generating AI fleet health report…';
+  try {
+    const data = await apiFetch('/api/report/daily');
+    body.textContent = data.report || data.error || 'No data.';
+    log('Daily report generated', 'ok');
+  } catch(e) {
+    body.textContent = 'Error: ' + e.message;
+    log('Report error: ' + e.message, 'err');
+  }
+  btn.disabled = false;
+  btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 4v5h5M20 20v-5h-5"/><path d="M4 9a8 8 0 0 1 14.9-2M20 15a8 8 0 0 1-14.9 2"/></svg> Generate report';
+}
+
+// ── Auto-refresh ─────────────────────────────────────────────────
+function startAutoRefresh() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = setInterval(loadDevices, AUTO_REFRESH_MS);
+}
+
+// ── Init ─────────────────────────────────────────────────────────
+loadDevices();
+startAutoRefresh();
+log('Dashboard loaded — auto-refresh every 30s', 'ok');
+</script>
+</body>
+</html>

@@ -56,9 +56,45 @@ const hrmsUserEmailHeader = process.env.HRMS_USER_EMAIL_HEADER || "x-ims-user-em
 const hrmsUserRoleHeader = process.env.HRMS_USER_ROLE_HEADER || "x-ims-user-role";
 const deviceAgentApiKey = process.env.DEVICE_AGENT_API_KEY || "airtel-device-agent-dev-key";
 let hasLoggedHrmsUnavailableWarning = false;
-const openAiApiKey = process.env.OPENAI_API_KEY || "";
+const openAiApiKey = process.env.OPENAI_API_KEY || process.env.OPENAI_KEY || process.env.AI_API_KEY || "";
 const openAiGeneralChatModel = process.env.OPENAI_GENERAL_CHAT_MODEL || "gpt-5.4-mini";
-const openAiApiBaseUrl = process.env.OPENAI_API_BASE_URL || "https://api.openai.com/v1";
+const defaultOpenAiApiBaseUrl = "https://api.openai.com/v1";
+const defaultOpenRouterApiBaseUrl = "https://openrouter.ai/api/v1";
+
+function normalizeOpenAiApiBaseUrl(rawUrl, apiKey) {
+  const selectedUrl = String(rawUrl || "").trim() || (apiKey.startsWith("sk-or-") ? defaultOpenRouterApiBaseUrl : defaultOpenAiApiBaseUrl);
+
+  try {
+    const url = new URL(selectedUrl);
+
+    if (url.hostname === "api.openrouter.ai") {
+      url.hostname = "openrouter.ai";
+    }
+
+    if (url.hostname === "openrouter.ai") {
+      const path = url.pathname.replace(/\/+$|\/$/, "");
+      if (path === "" || path === "/") {
+        url.pathname = "/api/v1";
+      } else if (path === "/v1") {
+        url.pathname = "/api/v1";
+      } else if (path === "/api") {
+        url.pathname = "/api/v1";
+      } else if (!path.startsWith("/api/v1")) {
+        url.pathname = "/api/v1";
+      }
+    }
+
+    return url.toString().replace(/\/+$|\/$/, "");
+  } catch {
+    return selectedUrl.replace(/\/+$|\/$/, "");
+  }
+}
+
+const openAiApiBaseUrl = normalizeOpenAiApiBaseUrl(
+  process.env.OPENAI_API_BASE_URL || process.env.OPENROUTER_API_BASE_URL,
+  openAiApiKey,
+);
+const openAiUsesOpenRouter = openAiApiKey.startsWith("sk-or-") || openAiApiBaseUrl.includes("openrouter.ai");
 const chatbotBaseDirectory = path.join(__dirname, "..", "AIMS Chatbot");
 const chatbotTrainingFile = path.join(chatbotBaseDirectory, "training_data.json");
 const chatbotKnowledgeFiles = [
@@ -146,6 +182,85 @@ function hashToken(token) {
 
 function getFrontendBaseUrl(req) {
   return process.env.FRONTEND_URL || process.env.APP_BASE_URL || "http://localhost:5173";
+}
+
+function getRequestOrigin(req) {
+  const forwardedProto = String(req?.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const forwardedHost = String(req?.headers["x-forwarded-host"] || "").split(",")[0].trim();
+  const protocol = forwardedProto || req?.protocol || "http";
+  const host = forwardedHost || req?.get?.("host") || "";
+
+  if (!host) {
+    return null;
+  }
+
+  return `${protocol}://${host}`.replace(/\/$/, "");
+}
+
+function resolveDeviceAgentApiUrl(req) {
+  const configuredUrl = String(process.env.DEVICE_AGENT_API_URL || "").trim();
+  if (configuredUrl) {
+    return configuredUrl.replace(/\/$/, "");
+  }
+
+  const requestOrigin = getRequestOrigin(req);
+  if (requestOrigin) {
+    return requestOrigin;
+  }
+
+  const frontendBaseUrl = String(process.env.APP_BASE_URL || getFrontendBaseUrl(req) || "").trim();
+  if (frontendBaseUrl) {
+    return frontendBaseUrl.replace(/\/$/, "").replace(/:\d+$/, ":4000");
+  }
+
+  return "http://127.0.0.1:4000";
+}
+
+function buildAgentInstallCommand({ apiUrl, apiKey, assetTag, interval = 30 }) {
+  return [
+    "AirtelIMSDeviceAgent.exe",
+    "--install",
+    `--api-url "${String(apiUrl).replace(/"/g, '\\"')}"`,
+    `--api-key "${String(apiKey).replace(/"/g, '\\"')}"`,
+    `--asset-tag "${String(assetTag).replace(/"/g, '\\"')}"`,
+    `--interval ${Math.max(Number(interval) || 10, 10)}`,
+  ].join(" ");
+}
+
+function buildAgentInstallScript({ apiUrl, apiKey, assetTag, interval = 30 }) {
+  const escapedApiUrl = String(apiUrl).replace(/"/g, '`"');
+  const escapedApiKey = String(apiKey).replace(/"/g, '`"');
+  const escapedAssetTag = String(assetTag).replace(/"/g, '`"');
+  const effectiveInterval = Math.max(Number(interval) || 10, 10);
+
+  return `param(
+  [string]$AgentPath = (Join-Path $PSScriptRoot "AirtelIMSDeviceAgent.exe")
+)
+
+$ErrorActionPreference = "Stop"
+
+function Test-IsAdmin {
+  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+  return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+if (-not (Test-Path $AgentPath)) {
+  throw "AirtelIMSDeviceAgent.exe must be in the same folder as this script."
+}
+
+if (-not (Test-IsAdmin)) {
+  Write-Host "Requesting Administrator privileges..."
+  $quotedCommand = '-ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -AgentPath "' + $AgentPath + '"'
+  Start-Process powershell -Verb RunAs -ArgumentList $quotedCommand
+  exit 0
+}
+
+& $AgentPath --install --api-url "${escapedApiUrl}" --api-key "${escapedApiKey}" --asset-tag "${escapedAssetTag}" --interval ${effectiveInterval}
+Write-Host ""
+Write-Host "Installation finished for asset tag ${escapedAssetTag}."
+Write-Host "The agent will start automatically at Windows boot."
+`;
 }
 
 function isMicrosoftSsoConfigured() {
@@ -2335,6 +2450,88 @@ async function getEquipmentByAssetTag(assetTag) {
     [assetTag],
   );
   return rows[0] || null;
+}
+
+async function getEquipmentByComputerName(hostname) {
+  const [rows] = await pool.query(
+    `
+      SELECT id, asset_tag, computer_name, serial_number, device_health, equipment_name, status
+      FROM equipment
+      WHERE computer_name = ?
+      LIMIT 2
+    `,
+    [hostname],
+  );
+  if (rows.length > 1) {
+    const error = new Error("More than one equipment record uses this computer name. Hostname-based registration is ambiguous.");
+    error.statusCode = 409;
+    throw error;
+  }
+  return rows[0] || null;
+}
+
+async function getEquipmentByExistingAgentIdentity({ deviceUuid, hostname }) {
+  const normalizedDeviceUuid = String(deviceUuid || "").trim();
+  const normalizedHostname = String(hostname || "").trim();
+
+  if (!normalizedDeviceUuid) {
+    return null;
+  }
+
+  const [rows] = await pool.query(
+    `
+      SELECT
+        e.id,
+        e.asset_tag,
+        e.computer_name,
+        e.serial_number,
+        e.device_health,
+        e.equipment_name,
+        e.status
+      FROM device_agents da
+      INNER JOIN equipment e ON e.id = da.equipment_id
+      WHERE da.device_uuid = ?
+        ${normalizedHostname ? "AND da.hostname = ?" : ""}
+      ORDER BY da.last_seen_at DESC
+      LIMIT 1
+    `,
+    normalizedHostname ? [normalizedDeviceUuid, normalizedHostname] : [normalizedDeviceUuid],
+  );
+
+  return rows[0] || null;
+}
+
+async function resolveDeviceAgentEquipment({ assetTag, hostname, lookupMode, deviceUuid }) {
+  const normalizedLookupMode = String(lookupMode || "assetTag").trim().toLowerCase();
+  const normalizedAssetTag = String(assetTag || "").trim();
+  const normalizedHostname = String(hostname || "").trim();
+  const normalizedDeviceUuid = String(deviceUuid || "").trim();
+
+  if (normalizedAssetTag) {
+    const assetTagMatch = await getEquipmentByAssetTag(normalizedAssetTag);
+    if (assetTagMatch) {
+      return assetTagMatch;
+    }
+  }
+
+  if (normalizedDeviceUuid) {
+    const existingAgentMatch = await getEquipmentByExistingAgentIdentity({
+      deviceUuid: normalizedDeviceUuid,
+      hostname: normalizedHostname,
+    });
+    if (existingAgentMatch) {
+      return existingAgentMatch;
+    }
+  }
+
+  if (normalizedLookupMode === "hostname" && normalizedHostname) {
+    const hostnameMatch = await getEquipmentByComputerName(normalizedHostname);
+    if (hostnameMatch) {
+      return hostnameMatch;
+    }
+  }
+
+  return null;
 }
 
 async function upsertDeviceAgentRecord({ equipmentId, deviceUuid, hostname, operatingSystem, agentVersion, ipAddress }) {
@@ -4903,47 +5100,82 @@ function buildProjectDifferentiationAnswer() {
   };
 }
 
+async function safeParseJson(response) {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
 async function generateGeneralKnowledgeAnswer(message) {
   if (!openAiApiKey) {
     return null;
   }
 
-  const response = await fetch(`${openAiApiBaseUrl}/responses`, {
+  const requestUrl = openAiUsesOpenRouter
+    ? `${openAiApiBaseUrl.replace(/\/$/, "")}/chat/completions`
+    : `${openAiApiBaseUrl.replace(/\/$/, "")}/responses`;
+
+  const requestBody = openAiUsesOpenRouter
+    ? {
+        model: openAiGeneralChatModel,
+        messages: [
+          {
+            role: "system",
+            content: [
+              "You are a helpful assistant inside Airtel IMS.",
+              "Answer general questions clearly and concisely.",
+              "If the user asks about Airtel IMS live data, requests, approvals, assets, assignments, or workflow records, do not invent facts.",
+              "For Airtel IMS data questions, say you need system data lookup and keep the answer grounded.",
+              "For broad questions like improvements, writing help, planning, explanations, or general advice, answer normally.",
+            ].join(" "),
+          },
+          {
+            role: "user",
+            content: String(message || ""),
+          },
+        ],
+        temperature: 0.35,
+      }
+    : {
+        model: openAiGeneralChatModel,
+        reasoning: { effort: "low" },
+        input: [
+          {
+            role: "developer",
+            content: [
+              {
+                type: "input_text",
+                text: [
+                  "You are a helpful assistant inside Airtel IMS.",
+                  "Answer general questions clearly and concisely.",
+                  "If the user asks about Airtel IMS live data, requests, approvals, assets, assignments, or workflow records, do not invent facts.",
+                  "For Airtel IMS data questions, say you need system data lookup and keep the answer grounded.",
+                  "For broad questions like improvements, writing help, planning, explanations, or general advice, answer normally.",
+                ].join(" "),
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: String(message || ""),
+              },
+            ],
+          },
+        ],
+      };
+
+  const response = await fetch(requestUrl, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${openAiApiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      model: openAiGeneralChatModel,
-      reasoning: { effort: "low" },
-      input: [
-        {
-          role: "developer",
-          content: [
-            {
-              type: "input_text",
-              text: [
-                "You are a helpful assistant inside Airtel IMS.",
-                "Answer general questions clearly and concisely.",
-                "If the user asks about Airtel IMS live data, requests, approvals, assets, assignments, or workflow records, do not invent facts.",
-                "For Airtel IMS data questions, say you need system data lookup and keep the answer grounded.",
-                "For broad questions like improvements, writing help, planning, explanations, or general advice, answer normally.",
-              ].join(" "),
-            },
-          ],
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: String(message || ""),
-            },
-          ],
-        },
-      ],
-    }),
+    body: JSON.stringify(requestBody),
   });
 
   if (!response.ok) {
@@ -4951,7 +5183,43 @@ async function generateGeneralKnowledgeAnswer(message) {
   }
 
   const payload = await response.json();
-  const outputText = String(payload?.output_text || "").trim();
+  let outputText = "";
+
+  if (openAiUsesOpenRouter) {
+    if (Array.isArray(payload?.choices) && payload.choices.length > 0) {
+      const choice = payload.choices[0];
+      if (choice?.message?.content) {
+        outputText = String(choice.message.content).trim();
+      } else if (typeof choice?.message === "string") {
+        outputText = String(choice.message).trim();
+      }
+    }
+  } else {
+    if (typeof payload?.output_text === "string") {
+      outputText = payload.output_text.trim();
+    } else if (Array.isArray(payload?.output)) {
+      outputText = payload.output
+        .flatMap((item) => {
+          if (!item || !Array.isArray(item.content)) {
+            return [];
+          }
+
+          return item.content.flatMap((contentItem) => {
+            if (contentItem && typeof contentItem.text === "string") {
+              return contentItem.text;
+            }
+
+            if (contentItem && typeof contentItem?.text === "string") {
+              return contentItem.text;
+            }
+
+            return [];
+          });
+        })
+        .join("\n")
+        .trim();
+    }
+  }
 
   if (!outputText) {
     return null;
@@ -8086,15 +8354,16 @@ app.post("/api/device-agent/register", async (req, res) => {
   const hostname = String(req.body?.hostname || "").trim();
   const operatingSystem = String(req.body?.operatingSystem || "").trim();
   const agentVersion = String(req.body?.agentVersion || "").trim();
+  const lookupMode = String(req.body?.lookupMode || "assetTag").trim();
 
-  if (!assetTag || !deviceUuid || !hostname) {
-    return res.status(400).json({ message: "assetTag, deviceUuid, and hostname are required." });
+  if (!deviceUuid || !hostname) {
+    return res.status(400).json({ message: "deviceUuid and hostname are required." });
   }
 
   try {
-    const equipment = await getEquipmentByAssetTag(assetTag);
+    const equipment = await resolveDeviceAgentEquipment({ assetTag, hostname, lookupMode, deviceUuid });
     if (!equipment) {
-      return res.status(404).json({ message: "No equipment record exists for the supplied asset tag." });
+      return res.status(404).json({ message: "No equipment record exists for the supplied asset tag or hostname." });
     }
 
     const agent = await upsertDeviceAgentRecord({
@@ -8122,7 +8391,7 @@ app.post("/api/device-agent/register", async (req, res) => {
       },
     });
   } catch (error) {
-    return res.status(500).json({ message: normalizeError(error) });
+    return res.status(error?.statusCode || 500).json({ message: normalizeError(error) });
   }
 });
 
@@ -8136,16 +8405,17 @@ app.post("/api/device-agent/metrics", async (req, res) => {
   const hostname = String(req.body?.hostname || "").trim();
   const operatingSystem = String(req.body?.operatingSystem || "").trim();
   const agentVersion = String(req.body?.agentVersion || "").trim();
+  const lookupMode = String(req.body?.lookupMode || "assetTag").trim();
   const metricsPayload = req.body?.metrics ?? {};
 
-  if (!assetTag || !deviceUuid || !hostname) {
-    return res.status(400).json({ message: "assetTag, deviceUuid, and hostname are required." });
+  if (!deviceUuid || !hostname) {
+    return res.status(400).json({ message: "deviceUuid and hostname are required." });
   }
 
   try {
-    const equipment = await getEquipmentByAssetTag(assetTag);
+    const equipment = await resolveDeviceAgentEquipment({ assetTag, hostname, lookupMode, deviceUuid });
     if (!equipment) {
-      return res.status(404).json({ message: "No equipment record exists for the supplied asset tag." });
+      return res.status(404).json({ message: "No equipment record exists for the supplied asset tag or hostname." });
     }
 
     const agent = await upsertDeviceAgentRecord({
@@ -8254,7 +8524,7 @@ app.post("/api/device-agent/metrics", async (req, res) => {
       recommendation,
     });
   } catch (error) {
-    return res.status(500).json({ message: normalizeError(error) });
+    return res.status(error?.statusCode || 500).json({ message: normalizeError(error) });
   }
 });
 
@@ -8264,14 +8534,16 @@ app.get("/api/device-agent/recommendation", async (req, res) => {
   }
 
   const assetTag = String(req.query.assetTag || "").trim();
-  if (!assetTag) {
-    return res.status(400).json({ message: "assetTag is required." });
+  const hostname = String(req.query.hostname || "").trim();
+  const lookupMode = String(req.query.lookupMode || "assetTag").trim();
+  if (!assetTag && !hostname) {
+    return res.status(400).json({ message: "assetTag or hostname is required." });
   }
 
   try {
-    const equipment = await getEquipmentByAssetTag(assetTag);
+    const equipment = await resolveDeviceAgentEquipment({ assetTag, hostname, lookupMode });
     if (!equipment) {
-      return res.status(404).json({ message: "No equipment record exists for the supplied asset tag." });
+      return res.status(404).json({ message: "No equipment record exists for the supplied asset tag or hostname." });
     }
 
     const [rows] = await pool.query(
@@ -8310,7 +8582,7 @@ app.get("/api/device-agent/recommendation", async (req, res) => {
       generatedAt: latest.generated_at,
     });
   } catch (error) {
-    return res.status(500).json({ message: normalizeError(error) });
+    return res.status(error?.statusCode || 500).json({ message: normalizeError(error) });
   }
 });
 
@@ -8334,11 +8606,15 @@ app.get("/api/device-monitoring/overview", async (req, res) => {
           e.id AS equipment_id,
           e.asset_tag,
           e.equipment_name,
+          c.name AS category_name,
           e.computer_name,
           e.status,
           e.device_health,
           e.branch_id,
           b.name AS branch_name,
+          assigned_user.first_name AS assigned_employee_first_name,
+          assigned_user.last_name AS assigned_employee_last_name,
+          assigned_user.email AS assigned_employee_email,
           da.hostname AS agent_hostname,
           da.operating_system,
           da.agent_version,
@@ -8359,7 +8635,17 @@ app.get("/api/device-monitoring/overview", async (req, res) => {
           mr.model_version,
           mr.generated_at
         FROM equipment e
+        LEFT JOIN categories c ON c.id = e.category_id
         LEFT JOIN branches b ON b.id = e.branch_id
+        LEFT JOIN assignments active_assignment ON active_assignment.id = (
+          SELECT a2.id
+          FROM assignments a2
+          WHERE a2.equipment_id = e.id
+            AND a2.status = 'active'
+          ORDER BY a2.assigned_at DESC, a2.id DESC
+          LIMIT 1
+        )
+        LEFT JOIN users assigned_user ON assigned_user.id = active_assignment.employee_user_id
         LEFT JOIN device_agents da ON da.equipment_id = e.id
         LEFT JOIN device_metrics dm ON dm.id = (
           SELECT dm2.id
@@ -8376,6 +8662,11 @@ app.get("/api/device-monitoring/overview", async (req, res) => {
           LIMIT 1
         )
         WHERE (? IS NULL OR e.branch_id = ?)
+          AND LOWER(COALESCE(c.name, '')) IN ('laptop', 'desktop', 'computer')
+          AND e.status IN ('available', 'assigned', 'maintenance')
+          AND e.asset_tag NOT LIKE 'MON-%'
+          AND e.asset_tag NOT LIKE 'TEST-%'
+          AND e.equipment_name <> 'Monitoring Test Laptop'
         ORDER BY COALESCE(dm.recorded_at, da.last_seen_at, e.updated_at, e.created_at) DESC, e.id DESC
         LIMIT 30
       `,
@@ -8387,8 +8678,14 @@ app.get("/api/device-monitoring/overview", async (req, res) => {
         SELECT COUNT(*) AS total
         FROM alerts a
         INNER JOIN equipment e ON e.id = a.equipment_id
+        LEFT JOIN categories c ON c.id = e.category_id
         WHERE a.status = 'open'
           AND (? IS NULL OR e.branch_id = ?)
+          AND LOWER(COALESCE(c.name, '')) IN ('laptop', 'desktop', 'computer')
+          AND e.status IN ('available', 'assigned', 'maintenance')
+          AND e.asset_tag NOT LIKE 'MON-%'
+          AND e.asset_tag NOT LIKE 'TEST-%'
+          AND e.equipment_name <> 'Monitoring Test Laptop'
       `,
       [branchScope, branchScope],
     );
@@ -8398,28 +8695,55 @@ app.get("/api/device-monitoring/overview", async (req, res) => {
         SELECT COUNT(DISTINCT da.id) AS total
         FROM device_agents da
         INNER JOIN equipment e ON e.id = da.equipment_id
+        LEFT JOIN categories c ON c.id = e.category_id
         WHERE da.is_active = 1
           AND (? IS NULL OR e.branch_id = ?)
+          AND LOWER(COALESCE(c.name, '')) IN ('laptop', 'desktop', 'computer')
+          AND e.status IN ('available', 'assigned', 'maintenance')
+          AND e.asset_tag NOT LIKE 'MON-%'
+          AND e.asset_tag NOT LIKE 'TEST-%'
+          AND e.equipment_name <> 'Monitoring Test Laptop'
       `,
       [branchScope, branchScope],
     );
+
+    const deploymentApiUrl = resolveDeviceAgentApiUrl(req);
 
     return res.json({
       generatedAt: new Date().toISOString(),
       summary: {
         trackedAssets: rows.length,
         activeAgents: Number(activeAgentRows[0]?.total || 0),
-        onlineRecently: rows.filter((row) => row.last_seen_at && Date.now() - new Date(row.last_seen_at).getTime() <= 15 * 60 * 1000).length,
+        onlineRecently: rows.filter((row) => row.last_seen_at && Date.now() - new Date(row.last_seen_at).getTime() <= 90 * 1000).length,
         openAlerts: Number(openAlertRows[0]?.total || 0),
+      },
+      deployment: {
+        apiUrl: deploymentApiUrl,
+        installDirectory: "C:\\ProgramData\\AirtelIMSDeviceAgent",
+        startupMode: "Windows Scheduled Task at boot",
+        smokeTestCommand: 'AirtelIMSDeviceAgent.exe --once --config agent-config-YOURTAG.json',
+        installExampleCommand: buildAgentInstallCommand({
+          apiUrl: deploymentApiUrl,
+          apiKey: deviceAgentApiKey,
+          assetTag: "YOUR-ASSET-TAG",
+          interval: 10,
+        }),
       },
       records: rows.map((row) => ({
         equipmentId: Number(row.equipment_id),
         assetTag: row.asset_tag,
         equipmentName: row.equipment_name,
+        categoryName: row.category_name,
         computerName: row.computer_name,
         branchName: row.branch_name,
         status: row.status,
         deviceHealth: row.device_health,
+        assignedTo: row.assigned_employee_first_name || row.assigned_employee_last_name || row.assigned_employee_email
+          ? {
+              employeeName: `${row.assigned_employee_first_name || ""} ${row.assigned_employee_last_name || ""}`.trim() || row.assigned_employee_email,
+              employeeEmail: row.assigned_employee_email || null,
+            }
+          : null,
         agent: row.agent_hostname
           ? {
               hostname: row.agent_hostname,
@@ -8455,6 +8779,242 @@ app.get("/api/device-monitoring/overview", async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ message: normalizeError(error) });
+  }
+});
+
+app.get("/api/device-monitoring/detail", async (req, res) => {
+  const userId = Number(req.query.userId);
+  const equipmentId = Number(req.query.equipmentId);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: "A valid user id is required." });
+  }
+
+  if (!Number.isInteger(equipmentId) || equipmentId <= 0) {
+    return res.status(400).json({ message: "A valid equipment id is required." });
+  }
+
+  try {
+    const actor = await getUserContext(userId);
+    if (!canAccessDeviceMonitoring(actor)) {
+      return res.status(403).json({ message: "You do not have access to device monitoring." });
+    }
+
+    const branchScope = actor.role_name === "admin" || actor.role_name === "IT Director" ? null : Number(actor.branch_id || 0) || null;
+    const [rows] = await pool.query(
+      `
+        SELECT
+          e.id AS equipment_id,
+          e.asset_tag,
+          e.equipment_name,
+          c.name AS category_name,
+          e.computer_name,
+          e.status,
+          e.device_health,
+          b.name AS branch_name,
+          da.hostname AS agent_hostname,
+          da.operating_system,
+          da.agent_version,
+          da.last_seen_at,
+          dm.cpu_usage,
+          dm.ram_usage,
+          dm.disk_usage,
+          dm.disk_health,
+          dm.battery_health,
+          dm.battery_level,
+          dm.network_latency,
+          dm.packet_loss,
+          dm.temperature,
+          dm.uptime_seconds,
+          dm.workload_intensity,
+          dm.error_count,
+          dm.recorded_at,
+          mr.recommendation,
+          mr.confidence_score,
+          mr.model_version,
+          mr.generated_at,
+          active_user.first_name AS active_first_name,
+          active_user.last_name AS active_last_name,
+          active_user.email AS active_email,
+          active_user.office_location AS active_office_location,
+          active_assignment.assigned_at AS active_assigned_at
+        FROM equipment e
+        LEFT JOIN categories c ON c.id = e.category_id
+        LEFT JOIN branches b ON b.id = e.branch_id
+        LEFT JOIN device_agents da ON da.equipment_id = e.id
+        LEFT JOIN device_metrics dm ON dm.id = (
+          SELECT dm2.id
+          FROM device_metrics dm2
+          WHERE dm2.equipment_id = e.id
+          ORDER BY dm2.recorded_at DESC, dm2.id DESC
+          LIMIT 1
+        )
+        LEFT JOIN ml_recommendations mr ON mr.id = (
+          SELECT mr2.id
+          FROM ml_recommendations mr2
+          WHERE mr2.equipment_id = e.id
+          ORDER BY mr2.generated_at DESC, mr2.id DESC
+          LIMIT 1
+        )
+        LEFT JOIN assignments active_assignment
+          ON active_assignment.equipment_id = e.id
+          AND active_assignment.status = 'active'
+        LEFT JOIN users active_user ON active_user.id = active_assignment.employee_user_id
+        WHERE e.id = ?
+          AND (? IS NULL OR e.branch_id = ?)
+          AND LOWER(COALESCE(c.name, '')) IN ('laptop', 'desktop', 'computer')
+          AND e.status IN ('available', 'assigned', 'maintenance')
+          AND e.asset_tag NOT LIKE 'MON-%'
+          AND e.asset_tag NOT LIKE 'TEST-%'
+          AND e.equipment_name <> 'Monitoring Test Laptop'
+        LIMIT 1
+      `,
+      [equipmentId, branchScope, branchScope],
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ message: "Monitored device not found." });
+    }
+
+    const row = rows[0];
+
+    const [alertRows] = await pool.query(
+      `
+        SELECT alert_type, severity, status, message, created_at
+        FROM alerts
+        WHERE equipment_id = ?
+        ORDER BY created_at DESC, id DESC
+        LIMIT 5
+      `,
+      [equipmentId],
+    );
+
+    const [issueRows] = await pool.query(
+      `
+        SELECT issue_title, priority, issue_status, created_at
+        FROM issues
+        WHERE equipment_id = ?
+        ORDER BY created_at DESC, id DESC
+        LIMIT 3
+      `,
+      [equipmentId],
+    );
+
+    const [maintenanceRows] = await pool.query(
+      `
+        SELECT maintenance_status, condition_status, final_disposition, started_at
+        FROM maintenance_records
+        WHERE equipment_id = ?
+        ORDER BY started_at DESC, id DESC
+        LIMIT 3
+      `,
+      [equipmentId],
+    );
+
+    const [recentMetricRows] = await pool.query(
+      `
+        SELECT id, cpu_usage, ram_usage, disk_usage, temperature, recorded_at
+        FROM device_metrics
+        WHERE equipment_id = ?
+        ORDER BY recorded_at DESC, id DESC
+        LIMIT 8
+      `,
+      [equipmentId],
+    );
+
+    const usageSummary = [
+      row.active_email
+        ? {
+            title: "Current assignment",
+            subtitle: `${row.active_first_name || ""} ${row.active_last_name || ""}`.trim() || row.active_email,
+            meta: row.active_assigned_at ? `Assigned ${new Date(row.active_assigned_at).toLocaleString()}` : "Assigned device",
+          }
+        : {
+            title: "Current assignment",
+            subtitle: "Not actively assigned",
+            meta: `Current stock status: ${row.status}`,
+          },
+      ...issueRows.map((issue) => ({
+        title: issue.issue_title,
+        subtitle: `Issue ${issue.issue_status}`,
+        meta: `Priority ${issue.priority} • ${new Date(issue.created_at).toLocaleDateString()}`,
+      })),
+      ...maintenanceRows.map((maintenance) => ({
+        title: `Maintenance ${maintenance.maintenance_status}`,
+        subtitle: maintenance.condition_status || "Condition not recorded",
+        meta: maintenance.final_disposition || (maintenance.started_at ? new Date(maintenance.started_at).toLocaleDateString() : "No disposition yet"),
+      })),
+    ].slice(0, 6);
+
+    return res.json({
+      equipmentId: Number(row.equipment_id),
+      assetTag: row.asset_tag,
+      equipmentName: row.equipment_name,
+      categoryName: row.category_name,
+      computerName: row.computer_name,
+      branchName: row.branch_name,
+      status: row.status,
+      deviceHealth: row.device_health,
+      assignedTo: row.active_email
+        ? {
+            employeeName: `${row.active_first_name || ""} ${row.active_last_name || ""}`.trim(),
+            employeeEmail: row.active_email,
+            assignedAt: row.active_assigned_at,
+            officeLocation: row.active_office_location,
+          }
+        : null,
+      agent: row.agent_hostname
+        ? {
+            hostname: row.agent_hostname,
+            operatingSystem: row.operating_system,
+            version: row.agent_version,
+            lastSeenAt: row.last_seen_at,
+          }
+        : null,
+      latestMetric: row.recorded_at
+        ? {
+            cpuUsage: Number(row.cpu_usage || 0),
+            ramUsage: Number(row.ram_usage || 0),
+            diskUsage: Number(row.disk_usage || 0),
+            diskHealth: row.disk_health === null ? null : Number(row.disk_health),
+            batteryHealth: row.battery_health === null ? null : Number(row.battery_health),
+            batteryLevel: row.battery_level === null ? null : Number(row.battery_level),
+            networkLatency: row.network_latency === null ? null : Number(row.network_latency),
+            packetLoss: row.packet_loss === null ? null : Number(row.packet_loss),
+            temperature: row.temperature === null ? null : Number(row.temperature),
+            uptimeSeconds: Number(row.uptime_seconds || 0),
+            workloadIntensity: row.workload_intensity === null ? null : Number(row.workload_intensity),
+            errorCount: Number(row.error_count || 0),
+            recordedAt: row.recorded_at,
+          }
+        : null,
+      recentMetrics: recentMetricRows.map((metric) => ({
+        id: Number(metric.id),
+        cpuUsage: Number(metric.cpu_usage || 0),
+        ramUsage: Number(metric.ram_usage || 0),
+        diskUsage: Number(metric.disk_usage || 0),
+        temperature: metric.temperature === null ? null : Number(metric.temperature),
+        recordedAt: metric.recorded_at,
+      })),
+      recommendation: row.recommendation
+        ? {
+            label: row.recommendation,
+            confidenceScore: row.confidence_score === null ? null : Number(row.confidence_score),
+            modelVersion: row.model_version,
+            generatedAt: row.generated_at,
+          }
+        : null,
+      recentAlerts: alertRows.map((alert) => ({
+        alertType: alert.alert_type,
+        severity: alert.severity,
+        status: alert.status,
+        message: alert.message,
+        createdAt: alert.created_at,
+      })),
+      usageSummary,
+    });
+  } catch (error) {
+    return res.status(error?.statusCode || 500).json({ message: normalizeError(error) });
   }
 });
 
@@ -8568,14 +9128,13 @@ app.get("/api/device-monitoring/config", async (req, res) => {
       return res.status(403).json({ message: "You do not have access to device monitoring." });
     }
 
-    const apiBase = process.env.APP_BASE_URL || getFrontendBaseUrl() || "http://localhost:5173";
-    const apiUrl = String(apiBase).replace(/\/$/, "").replace(/:\d+$/, ":4000");
+    const apiUrl = resolveDeviceAgentApiUrl(req);
     const configJson = JSON.stringify(
       {
         apiUrl,
         apiKey: deviceAgentApiKey,
         assetTag,
-        interval: 300,
+        interval: 10,
       },
       null,
       2,
@@ -8584,6 +9143,39 @@ app.get("/api/device-monitoring/config", async (req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="agent-config-${assetTag}.json"`);
     return res.send(configJson);
+  } catch (error) {
+    return res.status(500).json({ message: normalizeError(error) });
+  }
+});
+
+app.get("/api/device-monitoring/install-script", async (req, res) => {
+  const userId = Number(req.query.userId);
+  const assetTag = String(req.query.assetTag || "").trim();
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: "A valid user id is required." });
+  }
+
+  if (!assetTag) {
+    return res.status(400).json({ message: "assetTag is required." });
+  }
+
+  try {
+    const actor = await getUserContext(userId);
+    if (!canAccessDeviceMonitoring(actor)) {
+      return res.status(403).json({ message: "You do not have access to device monitoring." });
+    }
+
+    const scriptContents = buildAgentInstallScript({
+      apiUrl: resolveDeviceAgentApiUrl(req),
+      apiKey: deviceAgentApiKey,
+      assetTag,
+      interval: 10,
+    });
+
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="install-agent-${assetTag}.ps1"`);
+    return res.send(scriptContents);
   } catch (error) {
     return res.status(500).json({ message: normalizeError(error) });
   }

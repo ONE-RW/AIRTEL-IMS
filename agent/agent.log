@@ -1,0 +1,156 @@
+2026-05-04 22:33:28,590 [INFO] ==================================================
+2026-05-04 22:33:28,599 [INFO] Device Health Agent starting on NTAM0001-RP-HUYE
+2026-05-04 22:33:28,599 [INFO] Central server: http://YOUR_SERVER_IP:5000
+2026-05-04 22:33:28,599 [INFO] Location: Unknown Location
+2026-05-04 22:33:28,600 [INFO] Scan interval: 60s
+2026-05-04 22:33:28,601 [INFO] ==================================================
+2026-05-04 22:33:28,601 [INFO] Collecting metrics…
+2026-05-04 22:33:42,038 [INFO] Metrics: CPU=70.3% MEM=97.9% TEMP=0.0°C
+2026-05-04 22:33:44,759 [ERROR] Cannot reach central server at http://YOUR_SERVER_IP:5000. Will retry next cycle.
+2026-05-04 22:34:44,847 [INFO] Collecting metrics…
+2026-05-04 22:34:58,921 [INFO] Metrics: CPU=77.0% MEM=95.1% TEMP=0.0°C
+2026-05-04 22:35:02,401 [ERROR] Cannot reach central server at http://YOUR_SERVER_IP:5000. Will retry next cycle.
+2026-05-04 22:36:02,483 [INFO] Collecting metrics…
+2026-05-04 22:36:14,084 [INFO] Metrics: CPU=63.0% MEM=95.3% TEMP=0.0°C
+2026-05-04 22:36:16,831 [ERROR] Cannot reach central server at http://YOUR_SERVER_IP:5000. Will retry next cycle.
+2026-05-04 22:36:24,509 [INFO] ==================================================
+2026-05-04 22:36:24,509 [INFO] Device Health Agent starting on NTAM0001-RP-HUYE
+2026-05-04 22:36:24,510 [INFO] Central server: http://YOUR_SERVER_IP:5000
+2026-05-04 22:36:24,510 [INFO] Location: Unknown Location
+2026-05-04 22:36:24,510 [INFO] Scan interval: 60s
+2026-05-04 22:36:24,511 [INFO] ==================================================
+2026-05-04 22:36:24,511 [INFO] Collecting metrics…
+2026-05-04 22:37:16,880 [INFO] Collecting metrics…
+2026-05-04 22:37:28,667 [INFO] Metrics: CPU=64.5% MEM=92.7% TEMP=0.0°C
+2026-05-04 22:37:31,401 [ERROR] Cannot reach central server at http://YOUR_SERVER_IP:5000. Will retry next cycle.
+2026-05-04 22:38:11,332 [INFO] ==================================================
+2026-05-04 22:38:11,332 [INFO] Device Health Agent starting on NTAM0001-RP-HUYE
+2026-05-04 22:38:11,333 [INFO] Central server: http://127.0.0.1:5000/
+2026-05-04 22:38:11,333 [INFO] Location: Unknown Location
+2026-05-04 22:38:11,333 [INFO] Scan interval: 60s
+2026-05-04 22:38:11,333 [INFO] ==================================================
+2026-05-04 22:38:11,334 [INFO] Collecting metrics…
+2026-05-04 22:38:23,237 [INFO] Metrics: CPU=63.8% MEM=93.2% TEMP=0.0°C
+2026-05-04 22:39:23,505 [INFO] Collecting metrics…
+2026-05-04 22:39:35,361 [INFO] Metrics: CPU=63.1% MEM=91.5% TEMP=0.0°C
+2026-05-04 22:40:35,545 [INFO] Collecting metrics…
+2026-05-04 22:40:47,442 [INFO] Metrics: CPU=63.7% MEM=94.6% TEMP=0.0°C
+2026-05-04 22:41:47,660 [INFO] Collecting metrics…
+2026-05-04 22:41:59,235 [INFO] Metrics: CPU=64.8% MEM=86.1% TEMP=0.0°C
+2026-05-04 22:42:59,400 [INFO] Collecting metrics…
+2026-05-04 22:43:11,451 [INFO] Metrics: CPU=65.3% MEM=93.5% TEMP=0.0°C
+2026-05-04 22:44:11,772 [INFO] Collecting metrics…
+2026-05-04 22:44:24,183 [INFO] Metrics: CPU=65.2% MEM=92.4% TEMP=0.0°C
+2026-05-04 22:45:24,515 [INFO] Collecting metrics…
+2026-05-04 22:45:37,116 [INFO] Metrics: CPU=68.9% MEM=94.3% TEMP=0.0°C
+2026-05-04 22:46:37,388 [INFO] Collecting metrics…
+2026-05-04 22:46:49,108 [INFO] Metrics: CPU=72.3% MEM=95.6% TEMP=0.0°C
+2026-05-04 22:47:49,317 [INFO] Collecting metrics…
+2026-05-04 22:48:01,292 [INFO] Metrics: CPU=64.9% MEM=95.2% TEMP=0.0°C
+2026-05-04 22:49:01,707 [INFO] Collecting metrics…
+2026-05-04 22:49:23,656 [INFO] ==================================================
+2026-05-04 22:49:23,657 [INFO] Device Health Agent starting on NTAM0001-RP-HUYE
+2026-05-04 22:49:23,658 [INFO] Central server: http://127.0.0.1:5000/
+2026-05-04 22:49:23,659 [INFO] Location: Unknown Location
+2026-05-04 22:49:23,659 [INFO] Scan interval: 60s
+2026-05-04 22:49:23,659 [INFO] ==================================================
+2026-05-04 22:49:23,659 [INFO] Collecting metrics…
+2026-05-04 22:49:36,455 [INFO] Metrics: CPU=63.7% MEM=89.9% TEMP=0.0°C
+2026-05-04 22:50:36,867 [INFO] Collecting metrics…
+2026-05-04 22:50:48,949 [INFO] Metrics: CPU=67.0% MEM=94.5% TEMP=0.0°C
+2026-05-04 22:51:49,291 [INFO] Collecting metrics…
+2026-05-04 22:52:01,432 [INFO] Metrics: CPU=73.8% MEM=94.7% TEMP=0.0°C
+2026-05-04 22:52:27,451 [INFO] ==================================================
+2026-05-04 22:52:27,451 [INFO] Device Health Agent starting on NTAM0001-RP-HUYE
+2026-05-04 22:52:27,451 [INFO] Central server: http://127.0.0.1:5000/
+2026-05-04 22:52:27,452 [INFO] Location: Unknown Location
+2026-05-04 22:52:27,452 [INFO] Scan interval: 60s
+2026-05-04 22:52:27,452 [INFO] ==================================================
+2026-05-04 22:52:27,454 [INFO] Collecting metrics...
+2026-05-04 22:52:39,930 [INFO] Metrics: CPU=60.9% MEM=90.8% TEMP=0.0C
+2026-05-04 22:52:40,034 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 22:53:40,089 [INFO] Collecting metrics...
+2026-05-04 22:53:52,113 [INFO] Metrics: CPU=65.6% MEM=95.1% TEMP=0.0C
+2026-05-04 22:53:52,280 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 22:54:52,381 [INFO] Collecting metrics...
+2026-05-04 22:55:04,456 [INFO] Metrics: CPU=73.4% MEM=96.8% TEMP=0.0C
+2026-05-04 22:55:06,680 [ERROR] Cannot reach central server at http://127.0.0.1:5000/. Will retry next cycle.
+2026-05-04 22:56:06,738 [INFO] Collecting metrics...
+2026-05-04 22:56:18,362 [INFO] Metrics: CPU=69.0% MEM=98.0% TEMP=0.0C
+2026-05-04 22:56:18,487 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 22:57:18,515 [INFO] Collecting metrics...
+2026-05-04 22:57:30,428 [INFO] Metrics: CPU=65.6% MEM=91.6% TEMP=0.0C
+2026-05-04 22:57:30,510 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 22:58:30,550 [INFO] Collecting metrics...
+2026-05-04 22:58:43,103 [INFO] Metrics: CPU=67.9% MEM=92.0% TEMP=0.0C
+2026-05-04 22:58:43,222 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 22:59:43,254 [INFO] Collecting metrics...
+2026-05-04 22:59:55,360 [INFO] Metrics: CPU=66.9% MEM=91.8% TEMP=0.0C
+2026-05-04 22:59:55,503 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:00:55,537 [INFO] Collecting metrics...
+2026-05-04 23:01:07,359 [INFO] Metrics: CPU=65.7% MEM=89.0% TEMP=0.0C
+2026-05-04 23:01:07,472 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:02:07,500 [INFO] Collecting metrics...
+2026-05-04 23:02:19,420 [INFO] Metrics: CPU=65.7% MEM=92.6% TEMP=0.0C
+2026-05-04 23:02:19,497 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:03:19,546 [INFO] Collecting metrics...
+2026-05-04 23:03:31,377 [INFO] Metrics: CPU=68.5% MEM=94.0% TEMP=0.0C
+2026-05-04 23:03:31,502 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:04:31,554 [INFO] Collecting metrics...
+2026-05-04 23:04:43,381 [INFO] Metrics: CPU=67.9% MEM=93.9% TEMP=0.0C
+2026-05-04 23:04:43,486 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:05:43,538 [INFO] Collecting metrics...
+2026-05-04 23:05:55,550 [INFO] Metrics: CPU=80.0% MEM=93.9% TEMP=0.0C
+2026-05-04 23:05:55,686 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:06:55,787 [INFO] Collecting metrics...
+2026-05-04 23:07:08,048 [INFO] Metrics: CPU=78.6% MEM=93.9% TEMP=0.0C
+2026-05-04 23:07:08,209 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:08:08,300 [INFO] Collecting metrics...
+2026-05-04 23:08:34,229 [INFO] Metrics: CPU=55.8% MEM=98.6% TEMP=0.0C
+2026-05-04 23:08:37,710 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:09:37,900 [INFO] Collecting metrics...
+2026-05-04 23:09:52,779 [INFO] Metrics: CPU=38.0% MEM=97.1% TEMP=0.0C
+2026-05-04 23:09:54,415 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:10:54,462 [INFO] Collecting metrics...
+2026-05-04 23:11:14,380 [INFO] Metrics: CPU=69.4% MEM=96.1% TEMP=0.0C
+2026-05-04 23:11:14,647 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:12:14,720 [INFO] Collecting metrics...
+2026-05-04 23:12:27,951 [INFO] Metrics: CPU=78.7% MEM=95.8% TEMP=0.0C
+2026-05-04 23:12:28,256 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:13:28,308 [INFO] Collecting metrics...
+2026-05-04 23:13:42,583 [INFO] Metrics: CPU=73.4% MEM=93.9% TEMP=0.0C
+2026-05-04 23:13:43,586 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:14:44,165 [INFO] Collecting metrics...
+2026-05-04 23:15:00,690 [INFO] ==================================================
+2026-05-04 23:15:00,691 [INFO] Device Health Agent starting on NTAM0001-RP-HUYE
+2026-05-04 23:15:00,692 [INFO] Central server: http://127.0.0.1:5000/
+2026-05-04 23:15:00,692 [INFO] Location: Unknown Location
+2026-05-04 23:15:00,693 [INFO] Scan interval: 60s
+2026-05-04 23:15:00,693 [INFO] ==================================================
+2026-05-04 23:15:00,693 [INFO] Collecting metrics...
+2026-05-04 23:15:16,074 [INFO] Metrics: CPU=62.5% MEM=98.0% TEMP=0.0C
+2026-05-04 23:15:17,510 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:16:18,048 [INFO] Collecting metrics...
+2026-05-04 23:16:34,295 [INFO] Metrics: CPU=78.8% MEM=93.6% TEMP=0.0C
+2026-05-04 23:16:35,252 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:17:35,327 [INFO] Collecting metrics...
+2026-05-04 23:17:49,167 [INFO] Metrics: CPU=85.2% MEM=95.6% TEMP=0.0C
+2026-05-04 23:17:49,739 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:18:49,893 [INFO] Collecting metrics...
+2026-05-04 23:19:08,327 [INFO] Metrics: CPU=45.9% MEM=96.4% TEMP=0.0C
+2026-05-04 23:19:09,514 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:20:09,615 [INFO] Collecting metrics...
+2026-05-04 23:20:25,396 [INFO] Metrics: CPU=69.1% MEM=97.6% TEMP=0.0C
+2026-05-04 23:20:25,772 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:21:25,836 [INFO] Collecting metrics...
+2026-05-04 23:21:41,290 [INFO] Metrics: CPU=82.8% MEM=96.4% TEMP=0.0C
+2026-05-04 23:21:41,905 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:22:42,094 [INFO] Collecting metrics...
+2026-05-04 23:22:58,674 [INFO] Metrics: CPU=71.2% MEM=96.8% TEMP=0.0C
+2026-05-04 23:23:00,329 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:24:00,409 [INFO] Collecting metrics...
+2026-05-04 23:24:13,871 [INFO] Metrics: CPU=69.0% MEM=95.6% TEMP=0.0C
+2026-05-04 23:24:14,141 [INFO] Data sent successfully to http://127.0.0.1:5000/
+2026-05-04 23:25:14,282 [INFO] Collecting metrics...
+2026-05-04 23:25:39,847 [INFO] Metrics: CPU=42.3% MEM=98.6% TEMP=0.0C
+2026-05-04 23:25:40,895 [INFO] Data sent successfully to http://127.0.0.1:5000/

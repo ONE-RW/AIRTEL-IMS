@@ -26,7 +26,8 @@ const sessionSecret = process.env.HRMS_SESSION_SECRET || "hrms-local-session-sec
 const hrmsIdEncryptionSecret = process.env.HRMS_ID_ENCRYPTION_KEY || sessionSecret;
 const sessionLifetimeMs = Number(process.env.HRMS_SESSION_TTL_MS || 1000 * 60 * 60 * 12);
 const publicDir = path.join(__dirname, "..", "public");
-const hrDashboardRole = "hr recruitment officer";
+const hrManagementRoles = new Set(["hr recruitment officer", "hr director"]);
+const hrDashboardAccessRoles = new Set(["hr recruitment officer", "hr director"]);
 const integrationApiKey = process.env.HRMS_API_KEY || "";
 const integrationApiKeyHeader = process.env.HRMS_API_KEY_HEADER || "x-api-key";
 const smtpFrom = process.env.SMTP_FROM || defaultHrEmail;
@@ -206,8 +207,9 @@ function normalizeEmployeeStatusForIms(value) {
   return ["active", "inactive", "pending"].includes(normalized) ? normalized : "active";
 }
 
-function isHrRecruitmentOfficer(roleName) {
-  return normalizeRole(roleName) === hrDashboardRole;
+function canManageEmployeesInHrms(actorOrRoleName) {
+  const roleName = typeof actorOrRoleName === "string" ? actorOrRoleName : actorOrRoleName?.role_name;
+  return hrManagementRoles.has(normalizeRole(roleName));
 }
 
 function hasValidIntegrationApiKey(req) {
@@ -223,7 +225,7 @@ function canReadForImsIntegration(actor) {
 }
 
 function canAccessHrmsDashboard(actor) {
-  return Boolean(actor && actor.status === "active" && isHrRecruitmentOfficer(actor.role_name));
+  return Boolean(actor && actor.status === "active" && hrDashboardAccessRoles.has(normalizeRole(actor.role_name)));
 }
 
 async function sendAccountCreatedEmail({ email, firstName, lastName, password }) {
@@ -1210,6 +1212,7 @@ function mapEmployee(row) {
 function mapHrUser(row) {
   return {
     id: row.id,
+    imsUserId: row.ims_user_id ? Number(row.ims_user_id) : null,
     firstName: row.first_name,
     lastName: row.last_name,
     fullName: `${row.first_name || ""} ${row.last_name || ""}`.trim(),
@@ -1219,6 +1222,22 @@ function mapHrUser(row) {
     jobTitle: row.job_title || "",
     role: row.role_name,
     status: row.status,
+  };
+}
+
+function mapDirectoryHrUser(row) {
+  return {
+    id: `hr-user-${row.id}`,
+    record_type: "hr_user",
+    local_hr_user_id: Number(row.id),
+    ims_user_id: row.ims_user_id ? Number(row.ims_user_id) : null,
+    full_name: `${row.first_name || ""} ${row.last_name || ""}`.trim(),
+    email: row.email,
+    ims_role_name: row.role_name || "No IMS role",
+    department_name: row.department_name || "HRMS access user",
+    job_title: row.job_title || null,
+    status: row.status || "active",
+    ims_account_status: row.ims_user_id ? `IMS user #${Number(row.ims_user_id)}` : "No IMS user link",
   };
 }
 
@@ -1285,7 +1304,7 @@ app.get("/api/dashboard", async (req, res) => {
     const actor = await resolveDashboardActor(req);
 
     if (!actor) {
-      return res.status(401).json({ message: "Only the HR Recruitment Officer can access the HRMS dashboard." });
+      return res.status(401).json({ message: "Only approved HRMS roles can access the HRMS dashboard." });
     }
 
     const [employeeRows] = await pool.query(
@@ -1362,9 +1381,9 @@ app.post("/api/auth/login", async (req, res) => {
       return res.status(403).json({ message: "This HRMS account is inactive." });
     }
 
-    if (!isHrRecruitmentOfficer(user.role_name)) {
+    if (!canAccessHrmsDashboard(user)) {
       return res.status(403).json({
-        message: "Only the HR Recruitment Officer can access HRMS.",
+        message: "Your IMS role is not enabled for HRMS access.",
       });
     }
 
@@ -1404,7 +1423,7 @@ app.post("/api/auth/sso", async (req, res) => {
     const actor = await resolveActor(req);
 
     if (!canAccessHrmsDashboard(actor)) {
-      return res.status(403).json({ message: "Only the HR Recruitment Officer can start an HRMS SSO session." });
+      return res.status(403).json({ message: "Your IMS role is not enabled for HRMS SSO access." });
     }
 
     const sessionToken = createSessionToken(actor);
@@ -1558,9 +1577,20 @@ app.get("/api/employees", async (req, res) => {
       `,
     );
 
+    const [hrUserRows] = await pool.query(
+      `
+        SELECT id, ims_user_id, first_name, last_name, email, role_name, status
+        FROM hr_users
+        ORDER BY first_name ASC, last_name ASC
+      `,
+    );
+
     const syncedRows = await Promise.all(rows.map((row) => syncEmployeeLinkState(row)));
 
-    return res.json({ employees: syncedRows.map(mapEmployee) });
+    return res.json({
+      employees: syncedRows.map(mapEmployee),
+      hrUsers: hrUserRows.map(mapDirectoryHrUser),
+    });
   } catch (error) {
     return res.status(500).json({ message: normalizeError(error) });
   }
@@ -1596,7 +1626,7 @@ app.get("/api/roles", async (req, res) => {
     const actor = await resolveDashboardActor(req);
 
     if (!actor) {
-      return res.status(401).json({ message: "Only the HR Recruitment Officer can load IMS roles." });
+      return res.status(401).json({ message: "An HRMS session is required to load IMS roles." });
     }
 
     const roles = await getAssignableImsRoles();
@@ -1610,8 +1640,8 @@ app.post("/api/employees", async (req, res) => {
   try {
     const actor = await resolveActor(req);
 
-    if (!canAccessHrmsDashboard(actor)) {
-      return res.status(401).json({ message: "Only the HR Recruitment Officer can manage employees in HRMS." });
+    if (!canManageEmployeesInHrms(actor)) {
+      return res.status(401).json({ message: "Only HR Recruitment Officer and HR Director can manage employees in HRMS." });
     }
 
     const firstName = normalizeRequiredText(req.body?.firstName, 40);
@@ -1708,8 +1738,8 @@ app.put("/api/employees/:id", async (req, res) => {
   try {
     const actor = await resolveActor(req);
 
-    if (!canAccessHrmsDashboard(actor)) {
-      return res.status(401).json({ message: "Only the HR Recruitment Officer can manage employees in HRMS." });
+    if (!canManageEmployeesInHrms(actor)) {
+      return res.status(401).json({ message: "Only HR Recruitment Officer and HR Director can manage employees in HRMS." });
     }
 
     const employeeId = Number(req.params.id);
@@ -1809,8 +1839,8 @@ app.post("/api/employees/:id/resend-credentials", async (req, res) => {
   try {
     const actor = await resolveActor(req);
 
-    if (!canAccessHrmsDashboard(actor)) {
-      return res.status(401).json({ message: "Only the HR Recruitment Officer can resend employee credentials in HRMS." });
+    if (!canManageEmployeesInHrms(actor)) {
+      return res.status(401).json({ message: "Only HR Recruitment Officer and HR Director can resend employee credentials in HRMS." });
     }
 
     const employeeId = Number(req.params.id);
@@ -1850,8 +1880,8 @@ app.delete("/api/employees/:id", async (req, res) => {
   try {
     const actor = await resolveActor(req);
 
-    if (!canAccessHrmsDashboard(actor)) {
-      return res.status(401).json({ message: "Only the HR Recruitment Officer can manage employees in HRMS." });
+    if (!canManageEmployeesInHrms(actor)) {
+      return res.status(401).json({ message: "Only HR Recruitment Officer and HR Director can manage employees in HRMS." });
     }
 
     const employeeId = Number(req.params.id);

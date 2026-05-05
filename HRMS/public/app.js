@@ -112,6 +112,7 @@ const state = {
   actor: null,
   token: "",
   employees: [],
+  hrUsers: [],
   employeePage: 1,
   employeesPerPage: 8,
   editingEmployeeId: null,
@@ -151,7 +152,7 @@ const sectionMeta = {
   register: {
     title: "Employee Settings",
     subtitleHr: "Create employees, assign IMS roles, and manage the records HRMS publishes to IMS.",
-    subtitleIt: "This section is limited to HR Recruitment Officer access.",
+    subtitleIt: "This section is limited to HR Recruitment Officer and HR Director access.",
     breadcrumb: "Employee Settings",
   },
 };
@@ -199,12 +200,20 @@ function normalizeRole(role) {
   return String(role || "").trim().toLowerCase();
 }
 
+function currentRole() {
+  return normalizeRole(state.actor?.role);
+}
+
 function isHrRole() {
-  return normalizeRole(state.actor?.role) === "hr recruitment officer";
+  return ["hr recruitment officer", "hr director"].includes(currentRole());
 }
 
 function isItRole() {
-  return normalizeRole(state.actor?.role) === "it support engineer";
+  return currentRole() === "it security manager";
+}
+
+function getRoleDisplayName() {
+  return state.actor?.role || "HRMS User";
 }
 
 function persistSession() {
@@ -559,12 +568,12 @@ function updateActiveLinkState() {
 function updateSectionMeta() {
   const meta = sectionMeta[state.activeSection] || sectionMeta.overview;
   if (state.activeSection === "overview") {
-    topbarTitle.textContent = isItRole() ? "IT Support Dashboard" : "HR Recruitment Officer Dashboard";
+    topbarTitle.textContent = `${getRoleDisplayName()} Dashboard`;
   } else {
     topbarTitle.textContent = meta.title;
   }
-  overviewCopy.textContent = state.activeSection === "overview" ? "" : isItRole() ? meta.subtitleIt : meta.subtitleHr;
-  dashboardChipLabel.textContent = isItRole() ? "IT Support" : "HR Recruitment Officer";
+  overviewCopy.textContent = state.activeSection === "overview" ? "" : isHrRole() ? meta.subtitleHr : meta.subtitleIt;
+  dashboardChipLabel.textContent = getRoleDisplayName();
   dashboardBreadcrumbCurrent.textContent = meta.breadcrumb;
 }
 
@@ -854,8 +863,12 @@ function applyRoleView() {
 function getFilteredEmployees() {
   const term = String(employeeSearch.value || "").trim().toLowerCase();
   const filter = String(employeeFilter.value || "all");
+  const directoryUsers = [
+    ...state.employees.map((employee) => ({ ...employee, record_type: "employee" })),
+    ...state.hrUsers,
+  ];
 
-  return state.employees.filter((employee) => {
+  return directoryUsers.filter((employee) => {
     const matchesSearch =
       !term ||
       [
@@ -865,6 +878,7 @@ function getFilteredEmployees() {
         employee.hrms_employee_id,
         employee.department_name,
         employee.job_title,
+        employee.ims_role_name,
       ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(term));
@@ -894,7 +908,7 @@ function renderEmployees() {
   const paginatedEmployees = filtered.slice(pageStart, pageStart + state.employeesPerPage);
 
   state.employeePage = currentPage;
-  directoryCountPill.textContent = `${filtered.length} employee${filtered.length === 1 ? "" : "s"} loaded`;
+  directoryCountPill.textContent = `${filtered.length} user${filtered.length === 1 ? "" : "s"} loaded`;
   if (employeePageStatus) {
     employeePageStatus.textContent = `Page ${currentPage} of ${totalPages}`;
   }
@@ -906,7 +920,7 @@ function renderEmployees() {
       <tr>
         <td colspan="7">
           <strong>No employees found</strong>
-          <small>Try another filter, another search term, or refresh the employee directory.</small>
+          <small>Try another filter, another search term, or refresh the HRMS directory.</small>
         </td>
       </tr>
     `;
@@ -920,10 +934,11 @@ function renderEmployees() {
 
   employeeList.innerHTML = paginatedEmployees
     .map((employee) => {
-      const selectedClass = employee.id === state.selectedEmployeeId ? " is-selected" : "";
+      const isEmployeeRecord = employee.record_type !== "hr_user";
+      const selectedClass = isEmployeeRecord && employee.id === state.selectedEmployeeId ? " is-selected" : "";
       const nextStatus = employee.status === "inactive" ? "active" : "inactive";
       const statusLabel = nextStatus === "active" ? "Activate" : "Deactivate";
-      const managementAction = isHrRole()
+      const managementAction = isHrRole() && isEmployeeRecord
         ? [
             createActionButton({
               label: "Edit",
@@ -948,13 +963,13 @@ function renderEmployees() {
               datasetValue: employee.id,
             }),
           ].join("")
-        : "";
+        : '<span class="table-inline-note">View only</span>';
 
       return `
         <tr class="${selectedClass.trim()}">
           <td>
             <strong>${employee.full_name}</strong>
-            <small>${employee.employee_code || "No code"}</small>
+            <small>${employee.record_type === "hr_user" ? `HRMS user${employee.local_hr_user_id ? ` #${employee.local_hr_user_id}` : ""}` : employee.employee_code || "No code"}</small>
           </td>
           <td>${employee.email || "No email"}</td>
           <td>${employee.ims_role_name || "No IMS role"}</td>
@@ -1050,6 +1065,7 @@ async function loadDashboard() {
 async function loadEmployees() {
   const data = await requestJson("/api/employees");
   state.employees = Array.isArray(data.employees) ? data.employees : [];
+  state.hrUsers = Array.isArray(data.hrUsers) ? data.hrUsers : [];
   state.employeePage = 1;
   if (!state.selectedEmployeeId && state.employees.length > 0) {
     state.selectedEmployeeId = state.employees[0].id;
@@ -1184,7 +1200,7 @@ employeeForm.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   if (!isHrRole()) {
-    setMessage(employeeMessage, "Only the HR Recruitment Officer can update employee records.", true);
+    setMessage(employeeMessage, "Only the HR Recruitment Officer and HR Director can update employee records.", true);
     return;
   }
 
