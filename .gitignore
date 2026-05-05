@@ -1,0 +1,25 @@
+# Secrets and local environment files
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Dependencies
+node_modules/
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Build artifacts
+build/
+build-*/
+dist/
+dist-*/
+
+# Runtime files and logs
+*.log
+*.sqlite
+*.db
