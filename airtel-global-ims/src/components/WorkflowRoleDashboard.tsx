@@ -61,6 +61,7 @@ const INTERNAL_SECTION_FALLBACKS = [
   "fulfillment",
   "equipment",
   "stock",
+  "suppliers",
   "my-equipment",
   "return-requests",
   "return-documents",
@@ -263,9 +264,10 @@ type EquipmentRow = {
   serial_number: string;
   computer_name: string | null;
   equipment_name: string;
-  status: "available" | "assigned" | "reserved" | "maintenance" | "retired" | "lost" | "replaced";
+  status: "available" | "assigned" | "reserved" | "maintenance" | "retired" | "lost" | "theft" | "replaced";
   stock_location?: "it_stock" | "warehouse_stock" | string;
   category_id: number;
+  vendor_id?: number | null;
   branch_id: number | null;
   country_id: number | null;
   vendor_name: string | null;
@@ -292,6 +294,16 @@ type CategoryRow = {
   id: number;
   name: string;
   depreciation_rate: number;
+};
+
+type VendorRow = {
+  id: number;
+  country_id: number | null;
+  name: string;
+  contact_person: string | null;
+  phone: string | null;
+  email: string | null;
+  created_at: string;
 };
 
 type MoveOrderRow = {
@@ -509,6 +521,7 @@ type ReportCount = {
 type WorkflowDashboardData = {
   currentUser?: LoggedInUser;
   categories: CategoryRow[];
+  vendors: VendorRow[];
   equipment: EquipmentRow[];
   requests: RequestRow[];
   employees: EmployeeRow[];
@@ -528,10 +541,19 @@ type WorkflowDashboardData = {
   };
 };
 
+type StockMonitorRow = {
+  categoryName: string;
+  availableCount: number;
+  totalCount: number;
+  branchLabel: string;
+  status: "healthy" | "low";
+};
+
 function createEmptyWorkflowDashboardData(currentUser: LoggedInUser): WorkflowDashboardData {
   return {
     currentUser,
     categories: [],
+    vendors: [],
     equipment: [],
     requests: [],
     employees: [],
@@ -558,6 +580,7 @@ type StockForm = {
   computerName: string;
   equipmentName: string;
   categoryId: string;
+  vendorId: string;
   vendorName: string;
   modelName: string;
   cpu: string;
@@ -575,6 +598,13 @@ type StockForm = {
   lifespanYears: string;
   includedAccessories: string[];
   accessoryNotes: string;
+};
+
+type VendorFormState = {
+  name: string;
+  contactPerson: string;
+  phone: string;
+  email: string;
 };
 
 type AccessoryBundleProfile = {
@@ -684,8 +714,19 @@ const equipmentAccessoryMap: Record<string, AccessoryBundleProfile> = {
     guidance: "Desktop registration should capture the full workstation kit, then add any extra peripherals issued with it.",
   },
   laptop: {
-    required: ["Laptop bag", "Power adapter", "Mouse", "USB-C to VGA / HDMI dongle"],
-    suggested: ["Docking station", "External keyboard", "Headset", "Laptop stand", "Ethernet adapter", "Privacy screen"],
+    required: [],
+    suggested: [
+      "Laptop bag",
+      "Power adapter",
+      "Mouse",
+      "USB-C to VGA / HDMI dongle",
+      "Docking station",
+      "External keyboard",
+      "Headset",
+      "Laptop stand",
+      "Ethernet adapter",
+      "Privacy screen",
+    ],
     guidance: "Laptop registration should reflect the issued handover bundle, not only the computer body.",
   },
   smartphone: {
@@ -896,6 +937,7 @@ const roleConfigs: Record<
           { label: "Overview", href: "#overview", icon: ClipboardCheck },
           { label: "Move Orders", href: "#move-orders", icon: FolderInput },
           { label: "Stock", href: "#stock", icon: Boxes },
+          { label: "Suppliers", href: "#suppliers", icon: Building2 },
         ],
       },
       {
@@ -993,6 +1035,43 @@ function normalizeDeviceMonitoringDetail(detail: Partial<DeviceMonitoringDetail>
     recentAlerts: Array.isArray(detail?.recentAlerts) ? detail.recentAlerts : [],
     usageSummary: Array.isArray(detail?.usageSummary) ? detail.usageSummary : [],
   };
+}
+
+const DEFAULT_LOW_STOCK_THRESHOLD = 3;
+
+function buildStockMonitorRows(items: EquipmentRow[], threshold = DEFAULT_LOW_STOCK_THRESHOLD): StockMonitorRow[] {
+  const grouped = new Map<string, StockMonitorRow>();
+
+  items.forEach((item) => {
+    const categoryName = item.category_name || item.equipment_name || "Uncategorized";
+    const branchLabel = item.branch_name || "No branch";
+    const key = `${branchLabel}:${categoryName}`;
+    const current = grouped.get(key) ?? {
+      categoryName,
+      availableCount: 0,
+      totalCount: 0,
+      branchLabel,
+      status: "healthy" as const,
+    };
+
+    current.totalCount += 1;
+    if (item.status === "available") {
+      current.availableCount += 1;
+    }
+    grouped.set(key, current);
+  });
+
+  return [...grouped.values()]
+    .map((row) => ({
+      ...row,
+      status: row.availableCount <= threshold ? "low" : "healthy",
+    }))
+    .sort((left, right) => {
+      if (left.availableCount !== right.availableCount) {
+        return left.availableCount - right.availableCount;
+      }
+      return left.categoryName.localeCompare(right.categoryName);
+    });
 }
 
 function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: WorkflowRoleDashboardProps) {
@@ -1102,6 +1181,8 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState(false);
   const [editingEquipmentId, setEditingEquipmentId] = useState<number | null>(null);
   const [isStockFormOpen, setIsStockFormOpen] = useState(false);
+  const [isWarehouseStockMonitorOpen, setIsWarehouseStockMonitorOpen] = useState(false);
+  const [isItStockMonitorOpen, setIsItStockMonitorOpen] = useState(false);
   const [isStockListOpen, setIsStockListOpen] = useState(true);
   const [stockControlView, setStockControlView] = useState<StockControlView>("available");
   const [exportFormat, setExportFormat] = useState<ExportFormat>("html");
@@ -1134,6 +1215,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
   const [moveOrderNote, setMoveOrderNote] = useState("");
   const [isMoveOrderModalOpen, setIsMoveOrderModalOpen] = useState(false);
   const [warehouseDecisionNotes, setWarehouseDecisionNotes] = useState<Record<number, string>>({});
+  const [warehouseMoveOrderSelections, setWarehouseMoveOrderSelections] = useState<Record<number, string>>({});
   const [selectedMoveOrderStatusOrder, setSelectedMoveOrderStatusOrder] = useState<MoveOrderRow | null>(null);
   const [selectedRequestContextRequest, setSelectedRequestContextRequest] = useState<RequestRow | null>(null);
   const [selectedBranchEmployeeId, setSelectedBranchEmployeeId] = useState<number | null>(null);
@@ -1171,6 +1253,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
     computerName: "",
     equipmentName: "",
     categoryId: "",
+    vendorId: "",
     vendorName: "",
     modelName: "",
     cpu: "",
@@ -1189,6 +1272,14 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
     includedAccessories: [],
     accessoryNotes: "",
   });
+  const [vendorForm, setVendorForm] = useState<VendorFormState>({
+    name: "",
+    contactPerson: "",
+    phone: "",
+    email: "",
+  });
+  const [editingVendorId, setEditingVendorId] = useState<number | null>(null);
+  const [isVendorModalOpen, setIsVendorModalOpen] = useState(false);
 
   const getMonitoringFreshness = (timestamp: string | null | undefined) => {
     if (!timestamp) {
@@ -1364,6 +1455,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
   }, [activeSection, roleView, user.id]);
 
   const categories = dashboardData?.categories ?? [];
+  const vendors = dashboardData?.vendors ?? [];
   const equipment = dashboardData?.equipment ?? [];
   const requests = dashboardData?.requests ?? [];
   const employees = dashboardData?.employees ?? [];
@@ -1406,13 +1498,16 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
     maintenanceRecords.length > 0 ||
     notifications.length > 0;
   const selectedStockCategory = categories.find((category) => String(category.id) === stockForm.categoryId);
-  const availableWarehouseCategoryIds = new Set(
+  const selectedVendor = vendors.find((vendor) => String(vendor.id) === stockForm.vendorId) || null;
+  const availableItStockCategoryIds = new Set(
     equipment
-      .filter((item) => item.stock_location === "warehouse_stock" && item.status === "available")
+      .filter((item) => item.stock_location !== "warehouse_stock" && item.status === "available")
       .map((item) => String(item.category_id)),
   );
   const hrRequestCategories = categories.filter(
-    (category) => availableWarehouseCategoryIds.has(String(category.id)) || String(category.id) === requestForm.categoryId,
+    (category) =>
+      (availableItStockCategoryIds.has(String(category.id)) || String(category.id) === requestForm.categoryId) &&
+      storageDeviceCategoryNames.has(category.name.trim().toLowerCase()),
   );
   const warehouseRegistrationCategories = categories.filter((category) => {
     const normalizedName = category.name.trim().toLowerCase();
@@ -2432,7 +2527,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       return ["itd_approval", "it_preparation"].includes(request.currentStageKey);
     }
 
-    return ["it_inventory_review", "itd_approval", "it_preparation", "security_review"].includes(request.currentStageKey);
+    return ["it_inventory_review", "it_loss_theft_validation", "itd_approval", "it_preparation", "security_review"].includes(request.currentStageKey);
   });
 
   const fulfillmentRequests = requests.filter(
@@ -2461,6 +2556,12 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
   const itStockEquipment = equipment.filter((item) => item.stock_location !== "warehouse_stock");
   const availableItStockEquipment = itStockEquipment.filter((item) => item.status === "available");
   const localAvailableEquipment = availableItStockEquipment.filter((item) => !user.branchId || item.branch_id === user.branchId);
+  const itSupportStockMonitorRows = buildStockMonitorRows(
+    itStockEquipment.filter((item) => !user.branchId || item.branch_id === user.branchId),
+  );
+  const itSupportLowStockMonitorRows = itSupportStockMonitorRows.filter((row) => row.status === "low");
+  const warehouseStockMonitorRows = buildStockMonitorRows(warehouseEquipment);
+  const warehouseLowStockMonitorRows = warehouseStockMonitorRows.filter((row) => row.status === "low");
   const equipmentById = new Map(equipment.map((item) => [item.id, item]));
   const employeeActiveAssignmentOptions = employeeAssignments
     .filter((assignment) => assignment.status === "active")
@@ -2473,7 +2574,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
     (item) =>
       item.stock_location !== "warehouse_stock" &&
       (!user.branchId || item.branch_id === user.branchId) &&
-      (item.status === "retired" || item.status === "lost"),
+      (item.status === "retired" || item.status === "lost" || item.status === "theft"),
   );
   const returnedHoldingAssignments = assignments
     .filter((assignment) => assignment.status === "returned")
@@ -3293,9 +3394,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
           `Status: ${formatQrStatusLabel(item.status)}`,
           `Specs: ${formatEquipmentSpecs(item) || "Not set"}`,
           `Accessories: ${formatEquipmentAccessories(item) || "Not set"}`,
-          `Accessory Notes: ${formatEquipmentAccessoryNotes(item) || "None"}`,
           `Warranty: ${formatQrDate(item.warranty_end_date)}`,
-          `${getEquipmentDepreciationSummary(item)}`,
           "Support: Share the company code with IT Support.",
         ].join("\n")
       : [
@@ -3872,6 +3971,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       computerName: "",
       equipmentName: "",
       categoryId: "",
+      vendorId: "",
       vendorName: "",
       modelName: "",
       cpu: "",
@@ -3889,6 +3989,17 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       lifespanYears: "4",
       includedAccessories: [],
       accessoryNotes: "",
+    });
+  };
+
+  const resetVendorForm = () => {
+    setEditingVendorId(null);
+    setIsVendorModalOpen(false);
+    setVendorForm({
+      name: "",
+      contactPerson: "",
+      phone: "",
+      email: "",
     });
   };
 
@@ -3915,6 +4026,11 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
   const handleSubmitEquipment = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
+    if (!stockForm.vendorId) {
+      setActionError("Select a registered supplier before saving the asset.");
+      return;
+    }
+
     if (
       requiredStockAccessories.length > 0 &&
       requiredStockAccessories.some((accessory) => !stockForm.includedAccessories.includes(accessory))
@@ -3938,7 +4054,8 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
         categoryId: Number(stockForm.categoryId),
         countryId: user.countryId,
         branchId: user.branchId,
-        vendorName: stockForm.vendorName,
+        vendorId: stockForm.vendorId ? Number(stockForm.vendorId) : null,
+        vendorName: selectedVendor?.name || null,
         modelName: stockForm.modelName,
         status: editingEquipmentId ? stockForm.status : "available",
         purchaseYear: Number(stockForm.purchaseYear || 0) || null,
@@ -3995,6 +4112,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       computerName: item.computer_name || "",
       equipmentName: item.equipment_name,
       categoryId: String(item.category_id),
+      vendorId: item.vendor_id ? String(item.vendor_id) : "",
       vendorName: item.vendor_name || "",
       modelName: item.model_name || "",
       cpu: specs.cpu || specs.processor || "",
@@ -4018,6 +4136,68 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
 
   const handleDeleteEquipment = async (equipmentId: number) => {
     await submitAction("DELETE", `/equipment/${equipmentId}`, { actorUserId: user.id }, "Stock item deleted.");
+  };
+
+  const handleSubmitVendor = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    const method = editingVendorId ? "PUT" : "POST";
+    const url = editingVendorId ? `/vendors/${editingVendorId}` : "/vendors";
+
+    const result = await submitAction(
+      method,
+      url,
+      {
+        actorUserId: user.id,
+        name: vendorForm.name,
+        contactPerson: vendorForm.contactPerson || null,
+        phone: vendorForm.phone || null,
+        email: vendorForm.email || null,
+        countryId: user.countryId,
+      },
+      editingVendorId ? "Supplier updated." : "Supplier created.",
+    );
+
+    if (result) {
+      resetVendorForm();
+    }
+  };
+
+  const handleEditVendor = (vendor: VendorRow) => {
+    setEditingVendorId(vendor.id);
+    setIsVendorModalOpen(true);
+    setVendorForm({
+      name: vendor.name,
+      contactPerson: vendor.contact_person || "",
+      phone: vendor.phone || "",
+      email: vendor.email || "",
+    });
+    setActiveSection("suppliers");
+  };
+
+  const handleOpenVendorModal = () => {
+    setEditingVendorId(null);
+    setVendorForm({
+      name: "",
+      contactPerson: "",
+      phone: "",
+      email: "",
+    });
+    setIsVendorModalOpen(true);
+    setActiveSection("suppliers");
+  };
+
+  const handleDeleteVendor = async (vendorId: number) => {
+    const result = await submitAction(
+      "DELETE",
+      `/vendors/${vendorId}?actorUserId=${user.id}`,
+      undefined,
+      "Supplier deleted.",
+    );
+
+    if (result && editingVendorId === vendorId) {
+      resetVendorForm();
+    }
   };
 
   const handleCreateStockCategory = async () => {
@@ -4160,6 +4340,13 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
   };
 
   const handleWarehouseDecision = async (moveOrderId: number, decision: "approved" | "partial" | "rejected") => {
+    const selectedItems = Object.entries(warehouseMoveOrderSelections)
+      .map(([itemId, equipmentId]) => ({
+        itemId: Number(itemId),
+        equipmentId: Number(equipmentId),
+      }))
+      .filter((item) => item.itemId > 0 && item.equipmentId > 0);
+
     await submitAction(
       "POST",
       `/move-orders/${moveOrderId}/decision`,
@@ -4167,6 +4354,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
         actorUserId: user.id,
         decision,
         note: warehouseDecisionNotes[moveOrderId] || null,
+        selectedItems,
       },
       decision === "approved"
         ? "Move order approved and reserved for IT receipt."
@@ -4179,6 +4367,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       ...current,
       [moveOrderId]: "",
     }));
+    setWarehouseMoveOrderSelections({});
     await loadTransferWorkspace();
     await loadDashboard();
   };
@@ -4193,6 +4382,9 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       "Warehouse receipt confirmed. Devices are now available in IT stock.",
     );
 
+    setItSupportStockSearchTerm("");
+    setStockControlView("available");
+    setActiveSection("stock");
     await loadTransferWorkspace();
     await loadDashboard();
   };
@@ -4851,12 +5043,14 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                       ...filteredReportEquipment.filter((item) => item.status === "assigned"),
                       ...filteredReportEquipment.filter((item) => item.status === "retired"),
                       ...filteredReportEquipment.filter((item) => item.status === "lost"),
+                      ...filteredReportEquipment.filter((item) => item.status === "theft"),
                     ]
                   : [
                       ...filteredReportEquipment.filter((item) => item.status === "assigned"),
                       ...filteredReportEquipment.filter((item) => item.status === "maintenance"),
                       ...filteredReportEquipment.filter((item) => item.status === "retired"),
                       ...filteredReportEquipment.filter((item) => item.status === "lost"),
+                      ...filteredReportEquipment.filter((item) => item.status === "theft"),
                     ],
               )
               .filter((item, index, items) => items.findIndex((candidate) => candidate.id === item.id) === index)
@@ -4994,7 +5188,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
         status === "pending" ? isLivePendingRequest(request) : request.request_status === status,
       ).length,
     }));
-    const equipmentReportCounts = ["available", "assigned", "maintenance", "retired", "lost"].map((status) => ({
+    const equipmentReportCounts = ["available", "assigned", "maintenance", "retired", "lost", "theft"].map((status) => ({
       label: status,
       total: filteredReportEquipment.filter((item) => item.status === status).length,
     }));
@@ -5772,6 +5966,52 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                     ).join(", ")}
                   </span>
                   <span>{order.reason || "No reason provided"}</span>
+                  {context === "warehouse" && order.status === "pending" ? (
+                    <div className="mini-list" style={{ marginTop: "0.65rem" }}>
+                      {order.items.map((item) => {
+                        const matchingOptions = warehouseEquipment.filter((equipmentItem) => {
+                          if (equipmentItem.status !== "available" || equipmentItem.stock_location !== "warehouse_stock") {
+                            return false;
+                          }
+
+                          if (item.requested_category_id && equipmentItem.category_id !== item.requested_category_id) {
+                            return false;
+                          }
+
+                          const currentSelection = warehouseMoveOrderSelections[item.id];
+                          const selectedElsewhere = order.items.some(
+                            (candidate) =>
+                              candidate.id !== item.id &&
+                              warehouseMoveOrderSelections[candidate.id] === String(equipmentItem.id),
+                          );
+
+                          return !selectedElsewhere || currentSelection === String(equipmentItem.id);
+                        });
+
+                        return (
+                          <label className="field" key={`warehouse-pick-${order.id}-${item.id}`} style={{ marginTop: "0.25rem" }}>
+                            <span>{item.requested_category_name || item.category_name || "Requested device"}</span>
+                            <select
+                              value={warehouseMoveOrderSelections[item.id] || ""}
+                              onChange={(event) =>
+                                setWarehouseMoveOrderSelections((current) => ({
+                                  ...current,
+                                  [item.id]: event.target.value,
+                                }))
+                              }
+                            >
+                              <option value="">Select matching device</option>
+                              {matchingOptions.map((equipmentItem) => (
+                                <option key={equipmentItem.id} value={equipmentItem.id}>
+                                  {equipmentItem.asset_tag} - {equipmentItem.equipment_name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                 </div>
                 <div className="user-secondary-cell">
                   <strong><span className={`status-pill status-${order.status}`}>{order.status}</span></strong>
@@ -5997,6 +6237,52 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
     </section>
   );
 
+  const renderStockMonitorPanel = (title: string, rows: StockMonitorRow[], emptyLabel: string) => (
+    <section className="dashboard-panel">
+      <div className="panel-header">
+        <div>
+          <h3>{title}</h3>
+          <span>Low stock at {DEFAULT_LOW_STOCK_THRESHOLD} or below</span>
+        </div>
+        <span>{rows.filter((row) => row.status === "low").length} low</span>
+      </div>
+      <div className="user-table workflow-stock-table workflow-stock-table-simple">
+        <div className="user-table-head workflow-stock-table-head">
+          <span>Category</span>
+          <span>Branch</span>
+          <span>Available</span>
+          <span>Total tracked</span>
+          <span>Status</span>
+        </div>
+        {rows.length > 0 ? (
+          rows.map((row) => (
+            <div className="user-table-row workflow-stock-table-row" key={`${title}-${row.branchLabel}-${row.categoryName}`}>
+              <div className="user-primary-cell">
+                <strong>{row.categoryName}</strong>
+              </div>
+              <div className="user-secondary-cell">
+                <strong>{row.branchLabel}</strong>
+              </div>
+              <div className="user-secondary-cell">
+                <strong>{row.availableCount}</strong>
+              </div>
+              <div className="user-secondary-cell">
+                <strong>{row.totalCount}</strong>
+              </div>
+              <div className="user-secondary-cell">
+                <span className={`status-pill status-${row.status === "low" ? "pending" : "fulfilled"}`}>
+                  {row.status === "low" ? "Low stock" : "Healthy"}
+                </span>
+              </div>
+            </div>
+          ))
+        ) : (
+          <p className="loading-text">{emptyLabel}</p>
+        )}
+      </div>
+    </section>
+  );
+
   const renderOverview = () => {
     if (roleView === "branch-manager") {
       const branchAssetChartKey = "branch-assets";
@@ -6009,6 +6295,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
         { label: "Maintenance", value: branchEquipment.filter((item) => item.status === "maintenance").length },
         { label: "Retired", value: branchEquipment.filter((item) => item.status === "retired").length },
         { label: "Lost", value: branchEquipment.filter((item) => item.status === "lost").length },
+        { label: "Theft", value: branchEquipment.filter((item) => item.status === "theft").length },
       ];
       const branchRequestStatusData = ["pending", "approved", "rejected", "fulfilled"].map((status) => ({
         label: status,
@@ -6308,6 +6595,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
         { label: "Maintenance", value: equipment.filter((item) => item.status === "maintenance").length },
         { label: "Retired", value: equipment.filter((item) => item.status === "retired").length },
         { label: "Lost", value: equipment.filter((item) => item.status === "lost").length },
+        { label: "Theft", value: equipment.filter((item) => item.status === "theft").length },
       ];
       return (
         <>
@@ -6466,6 +6754,12 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
               actionLabel="View stock"
               onClick={() => setActiveSection("stock")}
             />
+            <OverviewShortcutCard
+              title="IT Low Stock"
+              value={itSupportLowStockMonitorRows.length}
+              actionLabel="View in stock"
+              onClick={() => setActiveSection("stock")}
+            />
           </section>
           <section className="chart-panel-grid">
             <section className="dashboard-panel chart-panel-card">
@@ -6550,12 +6844,13 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       const activeWarehouseMoveLabel = chartFocusByKey[warehouseMoveChartKey] || "";
       const availableWarehouseCount = warehouseEquipment.filter((item) => item.status === "available").length;
       const approvedTransferCount = moveOrders.filter((item) => item.status === "approved").length;
-      const retiredWarehouseCount = warehouseEquipment.filter((item) => item.status === "retired" || item.status === "lost").length;
+      const retiredWarehouseCount = warehouseEquipment.filter((item) => item.status === "retired" || item.status === "lost" || item.status === "theft").length;
       const warehouseStockData = [
         { label: "Available", value: warehouseEquipment.filter((item) => item.status === "available").length },
         { label: "Reserved", value: warehouseEquipment.filter((item) => item.status === "reserved").length },
         { label: "Retired", value: warehouseEquipment.filter((item) => item.status === "retired").length },
         { label: "Lost", value: warehouseEquipment.filter((item) => item.status === "lost").length },
+        { label: "Theft", value: warehouseEquipment.filter((item) => item.status === "theft").length },
       ];
       const warehouseMoveOrderData = [
         { label: "Pending", value: warehousePendingMoveOrders.length },
@@ -6591,6 +6886,20 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
               actionLabel="View history"
               onClick={() => setActiveSection("move-orders")}
               kicker="Release history"
+            />
+            <OverviewShortcutCard
+              title="Registered Suppliers"
+              value={vendors.length}
+              actionLabel="Manage suppliers"
+              onClick={() => setActiveSection("suppliers")}
+              kicker="Supplier registry"
+            />
+            <OverviewShortcutCard
+              title="Warehouse Low Stock"
+              value={warehouseLowStockMonitorRows.length}
+              actionLabel="View in stock"
+              onClick={() => setActiveSection("stock")}
+              kicker="Restock watch"
             />
           </section>
           <section className="chart-panel-grid">
@@ -6808,7 +7117,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       }
 
       const availableWarehouseItems = warehouseEquipment.filter((item) => item.status === "available");
-      const retiredWarehouseItems = warehouseEquipment.filter((item) => item.status === "retired" || item.status === "lost");
+      const retiredWarehouseItems = warehouseEquipment.filter((item) => item.status === "retired" || item.status === "lost" || item.status === "theft");
       const filteredAvailableWarehouseItems = availableWarehouseItems.filter((item) => {
         const itemDate = item.purchase_date || "";
         return isWithinDateWindow(itemDate, warehouseStockDateWindow) && isSameSelectedDate(itemDate, warehouseStockSpecificDate);
@@ -6865,6 +7174,16 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                 <h3>Warehouse Stock Control</h3>
               </div>
               <div className="panel-header-actions">
+                <button
+                  className="secondary-btn compact-btn"
+                  type="button"
+                  onClick={() => setIsWarehouseStockMonitorOpen((current) => !current)}
+                >
+                  {isWarehouseStockMonitorOpen ? "Hide stock monitor" : "Show stock monitor"}
+                </button>
+                <button className="secondary-btn compact-btn" type="button" onClick={() => setActiveSection("suppliers")}>
+                  Manage suppliers
+                </button>
                 {isStockFormOpen ? (
                   <button className="secondary-btn compact-btn" type="button" onClick={resetStockForm}>
                     Close stock form
@@ -6876,6 +7195,11 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                 )}
               </div>
             </div>
+            {isWarehouseStockMonitorOpen ? (
+              <div style={{ marginBottom: "1rem" }}>
+                {renderStockMonitorPanel("Warehouse Stock Monitor", warehouseStockMonitorRows, "No warehouse stock categories are being tracked yet.")}
+              </div>
+            ) : null}
             {isStockFormOpen ? (
               <div className="hr-modal-overlay" role="dialog" aria-modal="true" onClick={resetStockForm}>
                 <div className="hr-modal-card warehouse-stock-modal-card" onClick={(event) => event.stopPropagation()}>
@@ -6966,13 +7290,43 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                       </div>
                     ) : null}
                     <label className="field">
-                      <span>Vendor</span>
-                      <input
-                        value={stockForm.vendorName}
-                        onChange={(event) => setStockForm((current) => ({ ...current, vendorName: event.target.value }))}
-                        placeholder="Example: Dell"
-                      />
+                      <span>Supplier</span>
+                      <select
+                        value={stockForm.vendorId}
+                        onChange={(event) => {
+                          const nextVendor = vendors.find((vendor) => String(vendor.id) === event.target.value) || null;
+                          setStockForm((current) => ({
+                            ...current,
+                            vendorId: event.target.value,
+                            vendorName: nextVendor?.name || "",
+                          }));
+                        }}
+                        required
+                      >
+                        <option value="">Select supplier</option>
+                        {vendors.map((vendor) => (
+                          <option key={vendor.id} value={vendor.id}>
+                            {vendor.name}
+                          </option>
+                        ))}
+                      </select>
+                      {selectedVendor ? (
+                        <small className="field-helper-text">
+                          {selectedVendor.contact_person || "No contact person"} / {selectedVendor.phone || "No phone"} / {selectedVendor.email || "No email"}
+                        </small>
+                      ) : null}
                     </label>
+                    {vendors.length === 0 ? (
+                      <article className="mini-list-card field-span-2">
+                        <strong>No suppliers registered yet</strong>
+                        <span>Create a supplier first, then come back to register the asset.</span>
+                        <div className="card-action-row">
+                          <button className="secondary-btn compact-btn" type="button" onClick={() => setActiveSection("suppliers")}>
+                            Open suppliers
+                          </button>
+                        </div>
+                      </article>
+                    ) : null}
                     <label className="field">
                       <span>Model</span>
                       <input
@@ -7115,6 +7469,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                             <option value="maintenance">Maintenance</option>
                             <option value="retired">Retired</option>
                             <option value="lost">Lost</option>
+                            <option value="theft">Theft</option>
                           </select>
                         </label>
                         <label className="field">
@@ -7466,7 +7821,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                         disabled={hrRequestCategories.length === 0}
                         required
                       >
-                        <option value="">{hrRequestCategories.length === 0 ? "No warehouse category available" : "Select category"}</option>
+                        <option value="">{hrRequestCategories.length === 0 ? "No IT stock category available" : "Select category"}</option>
                         {hrRequestCategories.map((category) => (
                           <option key={category.id} value={category.id}>
                             {category.name}
@@ -8710,7 +9065,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
         }
 
         if (stockControlView === "retired") {
-          return item.status === "retired" || item.status === "lost";
+          return item.status === "retired" || item.status === "lost" || item.status === "theft";
         }
 
         return true;
@@ -8727,7 +9082,21 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
             <div>
               <h3>Stock Control</h3>
             </div>
+            <div className="panel-header-actions">
+              <button
+                className="secondary-btn compact-btn"
+                type="button"
+                onClick={() => setIsItStockMonitorOpen((current) => !current)}
+              >
+                {isItStockMonitorOpen ? "Hide stock monitor" : "Show stock monitor"}
+              </button>
+            </div>
           </div>
+          {isItStockMonitorOpen ? (
+            <div style={{ marginBottom: "1rem" }}>
+              {renderStockMonitorPanel("IT Stock Monitor", itSupportStockMonitorRows, "No IT stock categories are being tracked yet.")}
+            </div>
+          ) : null}
           <div className="stock-control-filter-bar">
             <div className="filter-chip-row">
               {([
@@ -8961,6 +9330,145 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
       </section>
     );
   };
+
+  const renderSuppliersSection = () => (
+    <section className="dashboard-panel">
+      <div className="panel-header">
+        <div>
+          <h3>Supplier Registry</h3>
+          <p className="dashboard-subtitle">Warehouse Manager registers suppliers here before using them in stock intake.</p>
+        </div>
+        <div className="panel-header-actions">
+          <button className="primary-btn compact-btn" type="button" onClick={handleOpenVendorModal}>
+            Add supplier
+          </button>
+        </div>
+      </div>
+
+      <div className="dashboard-card-grid">
+        <article className="mini-list-card">
+          <strong>{vendors.length}</strong>
+          <span>Registered suppliers</span>
+        </article>
+        <article className="mini-list-card">
+          <strong>{vendors.filter((vendor) => vendor.email || vendor.phone).length}</strong>
+          <span>Suppliers with contact details</span>
+        </article>
+      </div>
+
+      <div className="subpanel-header">
+        <h4>Current suppliers</h4>
+        <span>{vendors.length} total</span>
+      </div>
+      <div className="user-table workflow-stock-table">
+        <div className="user-table-head workflow-stock-table-head">
+          <span>Name</span>
+          <span>Contact</span>
+          <span>Communication</span>
+          <span>Country</span>
+          <span>Actions</span>
+        </div>
+        {vendors.length > 0 ? (
+          vendors.map((vendor) => (
+            <div className="user-table-row workflow-stock-table-row" key={vendor.id}>
+              <div className="user-primary-cell">
+                <strong>{vendor.name}</strong>
+                <span>Created {formatProfileDate(vendor.created_at)}</span>
+              </div>
+              <div className="user-secondary-cell">
+                <strong>{vendor.contact_person || "No contact person"}</strong>
+                <span>Supplier record #{vendor.id}</span>
+              </div>
+              <div className="user-secondary-cell">
+                <strong>{vendor.phone || "No phone"}</strong>
+                <span>{vendor.email || "No email"}</span>
+              </div>
+              <div className="user-secondary-cell">
+                <strong>{vendor.country_id === user.countryId ? (user.countryName || "Current country") : "Shared"}</strong>
+                <span>{vendor.country_id || "No country"}</span>
+              </div>
+              <div className="table-action-group workflow-stock-table-actions">
+                <button className="table-action table-action-info" type="button" onClick={() => handleEditVendor(vendor)}>
+                  Edit
+                </button>
+                <button className="table-action table-action-danger" type="button" onClick={() => void handleDeleteVendor(vendor.id)}>
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))
+        ) : (
+          <p className="loading-text">No suppliers registered yet.</p>
+        )}
+      </div>
+      {isVendorModalOpen ? (
+        <div className="hr-modal-overlay" role="presentation" onClick={resetVendorForm}>
+          <section
+            className="hr-modal-card warehouse-stock-modal-card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="supplier-modal-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="panel-header" style={{ marginBottom: "1rem" }}>
+              <div>
+                <h3 id="supplier-modal-title">{editingVendorId ? "Edit supplier" : "Add supplier"}</h3>
+              </div>
+              <div className="panel-header-actions">
+                <button className="secondary-btn compact-btn" type="button" onClick={resetVendorForm}>
+                  Close
+                </button>
+              </div>
+            </div>
+            <form className="simple-form" onSubmit={handleSubmitVendor}>
+              <label className="field">
+                <span>Supplier name</span>
+                <input
+                  value={vendorForm.name}
+                  onChange={(event) => setVendorForm((current) => ({ ...current, name: event.target.value }))}
+                  placeholder="Example: Dell Technologies"
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Contact person</span>
+                <input
+                  value={vendorForm.contactPerson}
+                  onChange={(event) => setVendorForm((current) => ({ ...current, contactPerson: event.target.value }))}
+                  placeholder="Example: John Supplier"
+                />
+              </label>
+              <label className="field">
+                <span>Phone</span>
+                <input
+                  value={vendorForm.phone}
+                  onChange={(event) => setVendorForm((current) => ({ ...current, phone: event.target.value }))}
+                  placeholder="Supplier phone number"
+                />
+              </label>
+              <label className="field">
+                <span>Email</span>
+                <input
+                  type="email"
+                  value={vendorForm.email}
+                  onChange={(event) => setVendorForm((current) => ({ ...current, email: event.target.value }))}
+                  placeholder="supplier@example.com"
+                />
+              </label>
+              <div className="stock-form-footer field-span-2">
+                <button className="primary-btn compact-btn" type="submit">
+                  {editingVendorId ? "Update supplier" : "Add supplier"}
+                </button>
+                <button className="secondary-btn compact-btn" type="button" onClick={resetVendorForm}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
+    </section>
+  );
 
   const renderReportsSection = () => {
     if (roleView === "warehouse") {
@@ -9989,6 +10497,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                           <option value="fair">Fair</option>
                           <option value="damaged">Damaged</option>
                           <option value="lost">Lost</option>
+                          <option value="theft">Theft</option>
                         </select>
                       </label>
                       <label className="field">
@@ -10010,6 +10519,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                           <option value="maintenance">Needs maintenance</option>
                           <option value="retired">Wasted / destroyed / retire</option>
                           <option value="lost">Mark lost</option>
+                          <option value="theft">Mark theft</option>
                         </select>
                       </label>
                     </div>
@@ -10171,6 +10681,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                       <option value="fair">Fair</option>
                       <option value="damaged">Damaged</option>
                       <option value="lost">Lost</option>
+                      <option value="theft">Theft</option>
                     </select>
                   </label>
                   <label className="field">
@@ -10192,6 +10703,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                       <option value="maintenance">Send to maintenance</option>
                       <option value="retired">Retire / dispose</option>
                       <option value="lost">Mark lost</option>
+                      <option value="theft">Mark theft</option>
                     </select>
                   </label>
                 </div>
@@ -10322,6 +10834,7 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
                         <option value="available">Back to stock</option>
                         <option value="retired">Wasted / destroyed / retire</option>
                         <option value="lost">Lost</option>
+                        <option value="theft">Theft</option>
                         <option value="maintenance">Keep under maintenance</option>
                       </select>
                     </label>
@@ -10893,6 +11406,10 @@ function WorkflowRoleDashboard({ user, onLogout, onUserUpdate, roleView }: Workf
 
     if (activeSection === "my-equipment") {
       return renderMyEquipmentSection();
+    }
+
+    if (activeSection === "suppliers" && roleView === "warehouse") {
+      return renderSuppliersSection();
     }
 
     if (activeSection === "return-documents" && roleView === "it-support") {

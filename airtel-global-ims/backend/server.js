@@ -27,7 +27,8 @@ const smtpUser = process.env.SMTP_USER || (isGmailSender ? smtpFrom : "");
 const smtpPass = process.env.SMTP_PASS || "";
 const mailPreviewRecipient = process.env.MAIL_PREVIEW_RECIPIENT || "";
 const isSmtpConfigured = Boolean(smtpHost && smtpUser && smtpPass && smtpFrom);
-const isEmailOtpEnabled = process.env.EMAIL_OTP_ENABLED !== "false";
+// Temporarily force OTP off until we explicitly re-enable it.
+const isEmailOtpEnabled = false;
 const otpExpiryMs = 5 * 60 * 1000;
 const otpTrustMs = 60 * 60 * 1000;
 const passwordResetExpiryMs = 30 * 60 * 1000;
@@ -1309,7 +1310,7 @@ const requestTypeLabels = {
   standard: "Standard request",
   new_hire: "New hire",
   replacement: "Replacement",
-  loss_theft: "Loss or theft replacement",
+  loss_theft: "Loss or theft declaration",
 };
 
 const replacementWorkflowDefinitions = [
@@ -1322,6 +1323,57 @@ const replacementWorkflowDefinitions = [
   {
     key: "it_replacement_validation",
     label: "IT Device Health Validation",
+    settingKey: "workflow_it_inventory_role",
+    roleName: "IT support engineer",
+  },
+  {
+    key: "hr_replacement_booking",
+    label: "HR Device Booking",
+    settingKey: "workflow_hr_booking_role",
+    roleName: "HR recruitment officer",
+  },
+  {
+    key: "itd_approval",
+    label: "ITD Approval",
+    settingKey: "workflow_itd_role",
+    roleName: "ITD",
+  },
+  {
+    key: "hrd_approval",
+    label: "HRD Approval",
+    settingKey: "workflow_hrd_role",
+    roleName: "HRD",
+  },
+  {
+    key: "it_preparation",
+    label: "IT Device Preparation",
+    settingKey: "workflow_it_preparation_role",
+    roleName: "IT support engineer",
+  },
+  {
+    key: "security_review",
+    label: "Security Handover Review",
+    settingKey: "workflow_security_role",
+    roleName: "IT security manager",
+  },
+  {
+    key: "store_fulfillment",
+    label: "Device Handover",
+    settingKey: "workflow_fulfillment_role",
+    roleName: "IT support engineer",
+  },
+];
+
+const lossTheftWorkflowDefinitions = [
+  {
+    key: "hr_loss_theft_review",
+    label: "HR Loss or Theft Review",
+    settingKey: "workflow_hr_booking_role",
+    roleName: "HR recruitment officer",
+  },
+  {
+    key: "it_loss_theft_validation",
+    label: "IT Loss or Theft Validation",
     settingKey: "workflow_it_inventory_role",
     roleName: "IT support engineer",
   },
@@ -1648,7 +1700,7 @@ async function ensureEquipmentSpecsColumn() {
 async function ensureEquipmentStatusColumn() {
   await pool.query(`
     ALTER TABLE equipment
-    MODIFY COLUMN status ENUM('available', 'assigned', 'reserved', 'maintenance', 'retired', 'lost') DEFAULT 'available'
+    MODIFY COLUMN status ENUM('available', 'assigned', 'reserved', 'maintenance', 'retired', 'lost', 'theft') DEFAULT 'available'
   `);
 
   try {
@@ -3366,6 +3418,8 @@ async function getWorkflowDefinitions(requestType = "standard") {
 
   const baseDefinitions = requestType === "return"
     ? []
+    : requestType === "loss_theft"
+      ? lossTheftWorkflowDefinitions
     : requestType === "replacement"
       ? replacementWorkflowDefinitions
     : workflowDefinitionDefaults;
@@ -3433,6 +3487,249 @@ async function logAssetLifecycle({
       relatedRecordId || null,
     ],
   );
+}
+
+function buildLowStockScopeKey(scope) {
+  if (!scope?.branchId || !scope?.categoryId) {
+    return null;
+  }
+
+  return `${Number(scope.branchId)}:${Number(scope.categoryId)}:${normalizeStockLocation(scope.stockLocation)}`;
+}
+
+function buildLowStockAlertType(scope) {
+  const scopeKey = buildLowStockScopeKey(scope);
+  return scopeKey ? `low_stock:${scopeKey}` : null;
+}
+
+async function getOrCreateStockPoolLocationId(countryId, branchId, stockLocation) {
+  if (!countryId || !branchId) {
+    return null;
+  }
+
+  const locationName = normalizeStockLocation(stockLocation) === "warehouse_stock" ? "Warehouse Stock" : "IT Stock";
+  const [existingRows] = await pool.query(
+    `
+      SELECT id
+      FROM location
+      WHERE country_id = ? AND branch_id = ? AND name = ?
+      ORDER BY id ASC
+      LIMIT 1
+    `,
+    [Number(countryId), Number(branchId), locationName],
+  );
+
+  if (existingRows[0]?.id) {
+    return Number(existingRows[0].id);
+  }
+
+  const [insertResult] = await pool.query(
+    `
+      INSERT INTO location (country_id, branch_id, name, city, address)
+      VALUES (?, ?, ?, NULL, NULL)
+    `,
+    [Number(countryId), Number(branchId), locationName],
+  );
+
+  return Number(insertResult.insertId);
+}
+
+async function getEquipmentInventoryScope(equipmentId) {
+  if (!equipmentId) {
+    return null;
+  }
+
+  const [rows] = await pool.query(
+    `
+      SELECT
+        id,
+        category_id,
+        country_id,
+        branch_id,
+        stock_location,
+        status
+      FROM equipment
+      WHERE id = ?
+      LIMIT 1
+    `,
+    [Number(equipmentId)],
+  );
+
+  const row = rows[0];
+  if (!row) {
+    return null;
+  }
+
+  return {
+    equipmentId: Number(row.id),
+    categoryId: Number(row.category_id),
+    countryId: Number(row.country_id),
+    branchId: Number(row.branch_id),
+    stockLocation: normalizeStockLocation(row.stock_location),
+    status: row.status,
+  };
+}
+
+async function syncStockRowForEquipment(equipmentId) {
+  const scope = await getEquipmentInventoryScope(equipmentId);
+  if (!scope?.equipmentId || !scope.branchId || !scope.countryId) {
+    return null;
+  }
+
+  const stockLocationId = await getOrCreateStockPoolLocationId(scope.countryId, scope.branchId, scope.stockLocation);
+  if (!stockLocationId) {
+    return scope;
+  }
+
+  const quantityAvailable = scope.status === "available" ? 1 : 0;
+  const [existingRows] = await pool.query(
+    `
+      SELECT id
+      FROM stock
+      WHERE equipment_id = ?
+      ORDER BY id ASC
+      LIMIT 1
+    `,
+    [scope.equipmentId],
+  );
+
+  if (existingRows[0]?.id) {
+    await pool.query(
+      `
+        UPDATE stock
+        SET branch_id = ?, location_id = ?, quantity_available = ?, reorder_level = 0
+        WHERE id = ?
+      `,
+      [scope.branchId, stockLocationId, quantityAvailable, existingRows[0].id],
+    );
+  } else {
+    await pool.query(
+      `
+        INSERT INTO stock (equipment_id, branch_id, location_id, quantity_available, reorder_level)
+        VALUES (?, ?, ?, ?, 0)
+      `,
+      [scope.equipmentId, scope.branchId, stockLocationId, quantityAvailable],
+    );
+  }
+
+  return scope;
+}
+
+async function refreshLowStockAlertForScope(scope) {
+  const scopeKey = buildLowStockScopeKey(scope);
+  const alertType = buildLowStockAlertType(scope);
+  if (!scopeKey || !alertType) {
+    return;
+  }
+
+  const settings = await getSystemSettingsMap();
+  const lowStockThreshold = Math.max(0, Number(settings.low_stock_threshold || 3));
+  const [scopeRows] = await pool.query(
+    `
+      SELECT
+        e.id,
+        e.status,
+        c.name AS category_name,
+        b.name AS branch_name
+      FROM equipment e
+      INNER JOIN categories c ON c.id = e.category_id
+      INNER JOIN branches b ON b.id = e.branch_id
+      WHERE e.branch_id = ?
+        AND e.category_id = ?
+        AND e.stock_location = ?
+      ORDER BY e.id ASC
+    `,
+    [Number(scope.branchId), Number(scope.categoryId), normalizeStockLocation(scope.stockLocation)],
+  );
+
+  if (scopeRows.length === 0) {
+    await pool.query(
+      "UPDATE alerts SET status = 'resolved' WHERE alert_type = ? AND status <> 'resolved'",
+      [alertType],
+    );
+    return;
+  }
+
+  const availableCount = scopeRows.filter((item) => item.status === "available").length;
+  if (availableCount > lowStockThreshold) {
+    await pool.query(
+      "UPDATE alerts SET status = 'resolved' WHERE alert_type = ? AND status <> 'resolved'",
+      [alertType],
+    );
+    return;
+  }
+
+  const representativeEquipmentId = Number(scopeRows[0].id);
+  const scopeLabel = normalizeStockLocation(scope.stockLocation) === "warehouse_stock" ? "warehouse stock" : "IT stock";
+  const message = `${scopeRows[0].branch_name} has ${availableCount} available ${scopeRows[0].category_name} item(s) in ${scopeLabel}. Threshold is ${lowStockThreshold}.`;
+  const severity = availableCount === 0 ? "critical" : "high";
+  const [existingAlertRows] = await pool.query(
+    `
+      SELECT id
+      FROM alerts
+      WHERE alert_type = ?
+      ORDER BY id DESC
+      LIMIT 1
+    `,
+    [alertType],
+  );
+
+  if (existingAlertRows[0]?.id) {
+    await pool.query(
+      `
+        UPDATE alerts
+        SET equipment_id = ?, severity = ?, status = 'open', message = ?
+        WHERE id = ?
+      `,
+      [representativeEquipmentId, severity, message, existingAlertRows[0].id],
+    );
+    return;
+  }
+
+  await pool.query(
+    `
+      INSERT INTO alerts (equipment_id, metric_id, alert_type, severity, status, message)
+      VALUES (?, NULL, ?, ?, 'open', ?)
+    `,
+    [representativeEquipmentId, alertType, severity, message],
+  );
+}
+
+async function syncInventoryForEquipmentIds(equipmentIds, extraScopes = []) {
+  const normalizedIds = [...new Set((equipmentIds || []).map((value) => Number(value)).filter((value) => value > 0))];
+  const scopes = new Map();
+
+  for (const scope of extraScopes || []) {
+    const scopeKey = buildLowStockScopeKey(scope);
+    if (scopeKey) {
+      scopes.set(scopeKey, {
+        branchId: Number(scope.branchId),
+        categoryId: Number(scope.categoryId),
+        stockLocation: normalizeStockLocation(scope.stockLocation),
+      });
+    }
+  }
+
+  for (const equipmentId of normalizedIds) {
+    const scope = await syncStockRowForEquipment(equipmentId);
+    const scopeKey = buildLowStockScopeKey(scope);
+    if (scopeKey) {
+      scopes.set(scopeKey, {
+        branchId: scope.branchId,
+        categoryId: scope.categoryId,
+        stockLocation: scope.stockLocation,
+      });
+    }
+  }
+
+  for (const scope of scopes.values()) {
+    await refreshLowStockAlertForScope(scope);
+  }
+}
+
+async function syncAllInventoryStockLevels() {
+  const [rows] = await pool.query("SELECT id FROM equipment ORDER BY id ASC");
+  await syncInventoryForEquipmentIds(rows.map((row) => row.id));
 }
 
 async function createSmartAlerts(currentUser, equipment, requests, assignments, returns, issues, maintenanceRecords) {
@@ -3786,6 +4083,20 @@ async function getCategoryNameById(categoryId) {
   );
 
   return rows[0]?.name || null;
+}
+
+async function getVendorById(vendorId) {
+  const [rows] = await pool.query(
+    `
+      SELECT id, country_id, name, contact_person, phone, email, created_at
+      FROM vendors
+      WHERE id = ?
+      LIMIT 1
+    `,
+    [vendorId],
+  );
+
+  return rows[0] ?? null;
 }
 
 function mapLocalEmployeeRecord(record) {
@@ -7330,6 +7641,14 @@ async function getWorkflowDashboardData(userId) {
     "SELECT id, name, depreciation_rate FROM categories ORDER BY name ASC",
   );
 
+  const [vendors] = await pool.query(
+    `
+      SELECT id, country_id, name, contact_person, phone, email, created_at
+      FROM vendors
+      ORDER BY name ASC
+    `,
+  );
+
   const [equipment] = await pool.query(
     `
       SELECT
@@ -7341,6 +7660,7 @@ async function getWorkflowDashboardData(userId) {
         e.status,
         e.stock_location,
         e.category_id,
+        e.vendor_id,
         e.branch_id,
         e.country_id,
         e.vendor_name,
@@ -7803,6 +8123,7 @@ async function getWorkflowDashboardData(userId) {
   return {
     currentUser: toSessionUser(currentUser),
     categories,
+    vendors,
     equipment: scopedEquipment,
     requests: requestData,
     employees: ["HR Recruitment officer", "Hr department"].includes(currentUser.role_name) ? hrmsEmployees : employees,
@@ -7821,7 +8142,7 @@ async function getWorkflowDashboardData(userId) {
           status === "pending" ? isLivePendingRequest(item) : item.request_status === status,
         ).length,
       })),
-      equipmentStatus: ["available", "assigned", "maintenance", "retired", "lost"].map((status) => ({
+      equipmentStatus: ["available", "assigned", "maintenance", "retired", "lost", "theft"].map((status) => ({
         label: status,
         total: scopedEquipment.filter((item) => item.status === status).length,
       })),
@@ -7846,6 +8167,7 @@ async function getEquipmentDetails(equipmentId) {
         e.status,
         e.stock_location,
         e.category_id,
+        e.vendor_id,
         e.branch_id,
         e.country_id,
         e.vendor_name,
@@ -8281,6 +8603,8 @@ async function ensureOperationalDemoData() {
       ],
     );
   }
+
+  await syncAllInventoryStockLevels();
 }
 
 async function ensureDefaultAdmin() {
@@ -8663,6 +8987,7 @@ app.get("/api/device-monitoring/overview", async (req, res) => {
         )
         WHERE (? IS NULL OR e.branch_id = ?)
           AND LOWER(COALESCE(c.name, '')) IN ('laptop', 'desktop', 'computer')
+          AND e.stock_location <> 'warehouse_stock'
           AND e.status IN ('available', 'assigned', 'maintenance')
           AND e.asset_tag NOT LIKE 'MON-%'
           AND e.asset_tag NOT LIKE 'TEST-%'
@@ -8682,6 +9007,7 @@ app.get("/api/device-monitoring/overview", async (req, res) => {
         WHERE a.status = 'open'
           AND (? IS NULL OR e.branch_id = ?)
           AND LOWER(COALESCE(c.name, '')) IN ('laptop', 'desktop', 'computer')
+          AND e.stock_location <> 'warehouse_stock'
           AND e.status IN ('available', 'assigned', 'maintenance')
           AND e.asset_tag NOT LIKE 'MON-%'
           AND e.asset_tag NOT LIKE 'TEST-%'
@@ -8699,6 +9025,7 @@ app.get("/api/device-monitoring/overview", async (req, res) => {
         WHERE da.is_active = 1
           AND (? IS NULL OR e.branch_id = ?)
           AND LOWER(COALESCE(c.name, '')) IN ('laptop', 'desktop', 'computer')
+          AND e.stock_location <> 'warehouse_stock'
           AND e.status IN ('available', 'assigned', 'maintenance')
           AND e.asset_tag NOT LIKE 'MON-%'
           AND e.asset_tag NOT LIKE 'TEST-%'
@@ -8863,6 +9190,7 @@ app.get("/api/device-monitoring/detail", async (req, res) => {
         WHERE e.id = ?
           AND (? IS NULL OR e.branch_id = ?)
           AND LOWER(COALESCE(c.name, '')) IN ('laptop', 'desktop', 'computer')
+          AND e.stock_location <> 'warehouse_stock'
           AND e.status IN ('available', 'assigned', 'maintenance')
           AND e.asset_tag NOT LIKE 'MON-%'
           AND e.asset_tag NOT LIKE 'TEST-%'
@@ -10005,7 +10333,7 @@ app.get("/api/admin/reports", async (_req, res) => {
           SUM(CASE WHEN status = 'assigned' THEN 1 ELSE 0 END) AS assignedAssets,
           SUM(CASE WHEN status = 'maintenance' THEN 1 ELSE 0 END) AS maintenanceAssets,
           SUM(CASE WHEN status = 'retired' THEN 1 ELSE 0 END) AS retiredAssets,
-          SUM(CASE WHEN status = 'lost' THEN 1 ELSE 0 END) AS lostAssets
+          SUM(CASE WHEN status IN ('lost', 'theft') THEN 1 ELSE 0 END) AS lostAssets
         FROM equipment
       `,
     );
@@ -11302,6 +11630,7 @@ app.get("/api/equipment", async (_req, res) => {
         e.status,
         e.stock_location,
         e.category_id,
+        e.vendor_id,
         e.branch_id,
         e.country_id,
         e.vendor_name,
@@ -11348,6 +11677,7 @@ app.get("/api/warehouse/equipment", async (req, res) => {
           e.status,
           e.stock_location,
           e.category_id,
+          e.vendor_id,
           e.branch_id,
           e.country_id,
           e.vendor_name,
@@ -11483,7 +11813,7 @@ app.post("/api/move-orders", async (req, res) => {
 
 app.post("/api/move-orders/:id/decision", async (req, res) => {
   const moveOrderId = Number(req.params.id);
-  const { actorUserId, decision, note } = req.body ?? {};
+  const { actorUserId, decision, note, selectedItems = [] } = req.body ?? {};
   const actor = await getUserContext(Number(actorUserId));
   let finalDecision = String(decision);
 
@@ -11500,6 +11830,21 @@ app.post("/api/move-orders/:id/decision", async (req, res) => {
   }
 
   try {
+    const selectedItemRows = Array.isArray(selectedItems)
+      ? selectedItems
+          .map((item) => ({
+            itemId: Number(item?.itemId),
+            equipmentId: Number(item?.equipmentId),
+          }))
+          .filter((item) => item.itemId > 0 && item.equipmentId > 0)
+      : [];
+    const selectedEquipmentByItemId = new Map(selectedItemRows.map((item) => [item.itemId, item.equipmentId]));
+    const selectedEquipmentIds = selectedItemRows.map((item) => item.equipmentId);
+
+    if (new Set(selectedEquipmentIds).size !== selectedEquipmentIds.length) {
+      return res.status(400).json({ message: "Each selected warehouse device can only be used once per move order." });
+    }
+
     const [requestRows] = await pool.query(
       "SELECT id, requested_by_user_id, destination_branch_id, status FROM move_order_requests WHERE id = ? LIMIT 1",
       [moveOrderId],
@@ -11527,9 +11872,15 @@ app.post("/api/move-orders/:id/decision", async (req, res) => {
 
     if (["approved", "partial"].includes(finalDecision)) {
       let approvedCount = 0;
+      const reservedEquipmentIds = [];
 
       for (const item of itemRows) {
         if (!item.requested_category_id) {
+          continue;
+        }
+
+        const selectedEquipmentId = selectedEquipmentByItemId.get(Number(item.id));
+        if (!selectedEquipmentId) {
           continue;
         }
 
@@ -11537,18 +11888,20 @@ app.post("/api/move-orders/:id/decision", async (req, res) => {
           `
             SELECT id, asset_tag
             FROM equipment
-            WHERE category_id = ?
+            WHERE id = ?
+              AND category_id = ?
               AND stock_location = 'warehouse_stock'
               AND status = 'available'
-            ORDER BY id ASC
             LIMIT 1
           `,
-          [item.requested_category_id],
+          [selectedEquipmentId, item.requested_category_id],
         );
 
         const availableEquipment = availableRows[0];
         if (!availableEquipment) {
-          continue;
+          return res.status(400).json({
+            message: `${item.requested_category_name || "Selected"} device must still be available in warehouse stock and match the requested type.`,
+          });
         }
 
         await pool.query(
@@ -11568,6 +11921,7 @@ app.post("/api/move-orders/:id/decision", async (req, res) => {
           `,
           [availableEquipment.id],
         );
+        reservedEquipmentIds.push(availableEquipment.id);
 
         approvedCount += 1;
 
@@ -11584,11 +11938,15 @@ app.post("/api/move-orders/:id/decision", async (req, res) => {
       }
 
       if (approvedCount === 0) {
-        return res.status(400).json({ message: "No requested devices are currently available in warehouse stock." });
+        return res.status(400).json({ message: "Select at least one matching warehouse device before approving this move order." });
       }
 
       if (finalDecision === "approved" && approvedCount < itemRows.length) {
-        finalDecision = "partial";
+        return res.status(400).json({ message: "Select a device for every requested item or use partial approval." });
+      }
+
+      if (reservedEquipmentIds.length > 0) {
+        await syncInventoryForEquipmentIds(reservedEquipmentIds);
       }
     }
 
@@ -11666,7 +12024,7 @@ app.post("/api/move-orders/:id/receive", async (req, res) => {
 
     const [itemRows] = await pool.query(
       `
-        SELECT i.equipment_id, e.asset_tag, e.stock_location, e.status
+        SELECT i.equipment_id, e.asset_tag, e.stock_location, e.status, e.branch_id, e.category_id
         FROM move_order_request_items i
         INNER JOIN equipment e ON e.id = i.equipment_id
         WHERE i.move_order_request_id = ?
@@ -11718,6 +12076,14 @@ app.post("/api/move-orders/:id/receive", async (req, res) => {
         WHERE id = ?
       `,
       [moveOrderId],
+    );
+    await syncInventoryForEquipmentIds(
+      itemRows.map((item) => item.equipment_id),
+      itemRows.map((item) => ({
+        branchId: item.branch_id,
+        categoryId: item.category_id,
+        stockLocation: item.stock_location,
+      })),
     );
 
     return res.json({ message: "Receipt confirmed. Devices are now available in IT stock." });
@@ -11953,6 +12319,194 @@ app.post("/api/categories", async (req, res) => {
   }
 });
 
+app.get("/api/vendors", async (req, res) => {
+  const userId = Number(req.query.userId);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: "A valid user id is required." });
+  }
+
+  try {
+    const actor = await getUserContext(userId);
+
+    if (!actor || !canManageWarehouseInventory(actor.role_name)) {
+      return res.status(403).json({ message: "Only the Warehouse manager can view suppliers." });
+    }
+
+    const [rows] = await pool.query(
+      `
+        SELECT id, country_id, name, contact_person, phone, email, created_at
+        FROM vendors
+        ORDER BY name ASC
+      `,
+    );
+
+    return res.json(rows);
+  } catch (error) {
+    return res.status(500).json({ message: normalizeError(error) });
+  }
+});
+
+app.post("/api/vendors", async (req, res) => {
+  const {
+    actorUserId,
+    name,
+    contactPerson,
+    phone,
+    email,
+    countryId,
+  } = req.body ?? {};
+
+  const normalizedName = normalizeRequiredText(name, 150);
+  const normalizedContactPerson = normalizeOptionalText(contactPerson, 120);
+  const normalizedPhone = normalizeOptionalText(phone, 50);
+  const normalizedEmail = normalizeOptionalText(email, 150);
+  const normalizedCountryId = Number(countryId) > 0 ? Number(countryId) : null;
+
+  if (!normalizedName) {
+    return res.status(400).json({ message: "Supplier name is required." });
+  }
+
+  try {
+    const actor = await getUserContext(Number(actorUserId));
+
+    if (!actor || !canManageWarehouseInventory(actor.role_name)) {
+      return res.status(403).json({ message: "Only the Warehouse manager can register suppliers." });
+    }
+
+    const [existingRows] = await pool.query(
+      "SELECT id, country_id, name, contact_person, phone, email, created_at FROM vendors WHERE LOWER(name) = LOWER(?) LIMIT 1",
+      [normalizedName],
+    );
+
+    if (existingRows.length > 0) {
+      return res.json({
+        message: "Supplier already exists.",
+        vendor: existingRows[0],
+      });
+    }
+
+    const [result] = await pool.query(
+      `
+        INSERT INTO vendors (country_id, name, contact_person, phone, email)
+        VALUES (?, ?, ?, ?, ?)
+      `,
+      [normalizedCountryId, normalizedName, normalizedContactPerson, normalizedPhone, normalizedEmail],
+    );
+
+    const vendor = await getVendorById(result.insertId);
+
+    return res.status(201).json({
+      message: "Supplier created successfully.",
+      vendor,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: normalizeError(error) });
+  }
+});
+
+app.put("/api/vendors/:id", async (req, res) => {
+  const vendorId = Number(req.params.id);
+  const {
+    actorUserId,
+    name,
+    contactPerson,
+    phone,
+    email,
+    countryId,
+  } = req.body ?? {};
+
+  const normalizedName = normalizeRequiredText(name, 150);
+  const normalizedContactPerson = normalizeOptionalText(contactPerson, 120);
+  const normalizedPhone = normalizeOptionalText(phone, 50);
+  const normalizedEmail = normalizeOptionalText(email, 150);
+  const normalizedCountryId = Number(countryId) > 0 ? Number(countryId) : null;
+
+  if (!Number.isInteger(vendorId) || vendorId <= 0) {
+    return res.status(400).json({ message: "A valid supplier id is required." });
+  }
+
+  if (!normalizedName) {
+    return res.status(400).json({ message: "Supplier name is required." });
+  }
+
+  try {
+    const actor = await getUserContext(Number(actorUserId));
+
+    if (!actor || !canManageWarehouseInventory(actor.role_name)) {
+      return res.status(403).json({ message: "Only the Warehouse manager can update suppliers." });
+    }
+
+    const currentVendor = await getVendorById(vendorId);
+    if (!currentVendor) {
+      return res.status(404).json({ message: "Supplier was not found." });
+    }
+
+    const [duplicateRows] = await pool.query(
+      "SELECT id FROM vendors WHERE LOWER(name) = LOWER(?) AND id <> ? LIMIT 1",
+      [normalizedName, vendorId],
+    );
+
+    if (duplicateRows.length > 0) {
+      return res.status(400).json({ message: "Another supplier already uses that name." });
+    }
+
+    await pool.query(
+      `
+        UPDATE vendors
+        SET country_id = ?, name = ?, contact_person = ?, phone = ?, email = ?
+        WHERE id = ?
+      `,
+      [normalizedCountryId, normalizedName, normalizedContactPerson, normalizedPhone, normalizedEmail, vendorId],
+    );
+
+    const vendor = await getVendorById(vendorId);
+
+    return res.json({
+      message: "Supplier updated successfully.",
+      vendor,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: normalizeError(error) });
+  }
+});
+
+app.delete("/api/vendors/:id", async (req, res) => {
+  const vendorId = Number(req.params.id);
+  const actorUserId = Number(req.query.actorUserId);
+
+  if (!Number.isInteger(vendorId) || vendorId <= 0 || !Number.isInteger(actorUserId) || actorUserId <= 0) {
+    return res.status(400).json({ message: "A valid supplier id and actor user id are required." });
+  }
+
+  try {
+    const actor = await getUserContext(actorUserId);
+
+    if (!actor || !canManageWarehouseInventory(actor.role_name)) {
+      return res.status(403).json({ message: "Only the Warehouse manager can delete suppliers." });
+    }
+
+    const vendor = await getVendorById(vendorId);
+    if (!vendor) {
+      return res.status(404).json({ message: "Supplier was not found." });
+    }
+
+    const [[equipmentUsage]] = await pool.query("SELECT COUNT(*) AS total FROM equipment WHERE vendor_id = ?", [vendorId]);
+    const [[maintenanceUsage]] = await pool.query("SELECT COUNT(*) AS total FROM maintenance WHERE vendor_id = ?", [vendorId]);
+    const [[stockinUsage]] = await pool.query("SELECT COUNT(*) AS total FROM stockin WHERE vendor_id = ?", [vendorId]);
+
+    if (Number(equipmentUsage?.total || 0) > 0 || Number(maintenanceUsage?.total || 0) > 0 || Number(stockinUsage?.total || 0) > 0) {
+      return res.status(400).json({ message: "This supplier is already linked to stock, maintenance, or equipment records." });
+    }
+
+    await pool.query("DELETE FROM vendors WHERE id = ?", [vendorId]);
+
+    return res.json({ message: "Supplier deleted successfully." });
+  } catch (error) {
+    return res.status(500).json({ message: normalizeError(error) });
+  }
+});
+
 app.post("/api/equipment", async (req, res) => {
   const {
     actorUserId,
@@ -11963,6 +12517,7 @@ app.post("/api/equipment", async (req, res) => {
     categoryId,
     countryId,
     branchId,
+    vendorId,
     vendorName,
     modelName,
     status,
@@ -11984,6 +12539,7 @@ app.post("/api/equipment", async (req, res) => {
   const normalizedSerialNumber = normalizeRequiredText(serialNumber, 120);
   const normalizedComputerName = normalizeOptionalText(computerName, 120);
   const normalizedEquipmentName = normalizeRequiredText(equipmentName, 160);
+  const normalizedVendorId = Number(vendorId) > 0 ? Number(vendorId) : null;
   const normalizedVendorName = normalizeOptionalText(vendorName, 150);
   const normalizedModelName = normalizeOptionalText(modelName, 150);
   const normalizedStatus = normalizeOptionalText(status, 40) || "available";
@@ -12006,6 +12562,40 @@ app.post("/api/equipment", async (req, res) => {
   let failureStage = "insert equipment";
 
   try {
+    let resolvedVendorId = normalizedVendorId;
+    let resolvedVendorName = normalizedVendorName;
+
+    if (resolvedVendorId) {
+      const vendorRecord = await getVendorById(resolvedVendorId);
+      if (!vendorRecord) {
+        return res.status(404).json({ message: "Selected supplier was not found." });
+      }
+      resolvedVendorName = vendorRecord.name;
+    }
+
+    const equipmentInsertValues = [
+      normalizedAssetTag,
+      normalizedSerialNumber,
+      normalizedComputerName,
+      normalizedEquipmentName,
+      Number(categoryId),
+      Number(countryId),
+      Number(branchId),
+      resolvedVendorId,
+      resolvedVendorName,
+      normalizedModelName,
+      normalizedStatus,
+      normalizedStockLocation,
+      Number(purchaseYear) > 0 ? Number(purchaseYear) : null,
+      normalizedPurchaseDate,
+      normalizeOptionalNumber(purchaseCost, 0) ?? 0,
+      normalizedLocationDetails,
+      normalizedDeviceHealth,
+      normalizedWarrantyEndDate,
+      Number(lifespanYears) > 0 ? Number(lifespanYears) : 4,
+      sanitizedEquipmentSpecs ? JSON.stringify(sanitizedEquipmentSpecs) : null,
+    ];
+
     await pool.query(
       `
         INSERT INTO equipment (
@@ -12016,6 +12606,7 @@ app.post("/api/equipment", async (req, res) => {
           category_id,
           country_id,
           branch_id,
+          vendor_id,
           vendor_name,
           model_name,
           status,
@@ -12029,29 +12620,9 @@ app.post("/api/equipment", async (req, res) => {
           lifespan_years,
           equipment_specs
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (${equipmentInsertValues.map(() => "?").join(", ")})
       `,
-      [
-        normalizedAssetTag,
-        normalizedSerialNumber,
-        normalizedComputerName,
-        normalizedEquipmentName,
-        Number(categoryId),
-        Number(countryId),
-        Number(branchId),
-        normalizedVendorName,
-        normalizedModelName,
-        normalizedStatus,
-        normalizedStockLocation,
-        Number(purchaseYear) > 0 ? Number(purchaseYear) : null,
-        normalizedPurchaseDate,
-        normalizeOptionalNumber(purchaseCost, 0) ?? 0,
-        normalizedLocationDetails,
-        normalizedDeviceHealth,
-        normalizedWarrantyEndDate,
-        Number(lifespanYears) > 0 ? Number(lifespanYears) : 4,
-        sanitizedEquipmentSpecs ? JSON.stringify(sanitizedEquipmentSpecs) : null,
-      ],
+      equipmentInsertValues,
     );
 
     failureStage = "fetch inserted equipment id";
@@ -12071,6 +12642,7 @@ app.post("/api/equipment", async (req, res) => {
       relatedRecordType: "equipment",
       relatedRecordId: equipmentId,
     });
+    await syncInventoryForEquipmentIds([equipmentId]);
 
     return res.status(201).json({
       message: "Equipment created successfully.",
@@ -12094,6 +12666,7 @@ app.put("/api/equipment/:id", async (req, res) => {
     categoryId,
     countryId,
     branchId,
+    vendorId,
     vendorName,
     modelName,
     status,
@@ -12112,6 +12685,7 @@ app.put("/api/equipment/:id", async (req, res) => {
   const normalizedSerialNumber = normalizeRequiredText(serialNumber, 120);
   const normalizedComputerName = normalizeOptionalText(computerName, 120);
   const normalizedEquipmentName = normalizeRequiredText(equipmentName, 160);
+  const normalizedVendorId = Number(vendorId) > 0 ? Number(vendorId) : null;
   const normalizedVendorName = normalizeOptionalText(vendorName, 150);
   const normalizedModelName = normalizeOptionalText(modelName, 150);
   const normalizedStatus = normalizeOptionalText(status, 40) || "available";
@@ -12137,6 +12711,17 @@ app.put("/api/equipment/:id", async (req, res) => {
 
   try {
     const previousEquipment = await getEquipmentDetails(equipmentId);
+    let resolvedVendorId = normalizedVendorId;
+    let resolvedVendorName = normalizedVendorName;
+
+    if (resolvedVendorId) {
+      const vendorRecord = await getVendorById(resolvedVendorId);
+      if (!vendorRecord) {
+        return res.status(404).json({ message: "Selected supplier was not found." });
+      }
+      resolvedVendorName = vendorRecord.name;
+    }
+
     await pool.query(
       `
         UPDATE equipment
@@ -12148,6 +12733,7 @@ app.put("/api/equipment/:id", async (req, res) => {
           category_id = ?,
           country_id = ?,
           branch_id = ?,
+          vendor_id = ?,
           vendor_name = ?,
           model_name = ?,
           status = ?,
@@ -12170,7 +12756,8 @@ app.put("/api/equipment/:id", async (req, res) => {
         Number(categoryId),
         Number(countryId),
         Number(branchId),
-        normalizedVendorName,
+        resolvedVendorId,
+        resolvedVendorName,
         normalizedModelName,
         normalizedStatus,
         normalizedStockLocation,
@@ -12197,6 +12784,18 @@ app.put("/api/equipment/:id", async (req, res) => {
       relatedRecordType: "equipment",
       relatedRecordId: equipmentId,
     });
+    await syncInventoryForEquipmentIds(
+      [equipmentId],
+      previousEquipment
+        ? [
+            {
+              branchId: previousEquipment.branch_id,
+              categoryId: previousEquipment.category_id,
+              stockLocation: previousEquipment.stock_location,
+            },
+          ]
+        : [],
+    );
 
     return res.json({
       message: "Equipment updated successfully.",
@@ -12221,6 +12820,7 @@ app.delete("/api/equipment/:id", async (req, res) => {
   }
 
   try {
+    const previousEquipment = await getEquipmentDetails(equipmentId);
     const [assignmentRows] = await pool.query(
       "SELECT id FROM assignments WHERE equipment_id = ? AND status = 'active' LIMIT 1",
       [equipmentId],
@@ -12230,7 +12830,16 @@ app.delete("/api/equipment/:id", async (req, res) => {
       return res.status(400).json({ message: "Assigned equipment cannot be deleted." });
     }
 
+    await pool.query("DELETE FROM alerts WHERE equipment_id = ?", [equipmentId]);
+    await pool.query("DELETE FROM stock WHERE equipment_id = ?", [equipmentId]);
     await pool.query("DELETE FROM equipment WHERE id = ?", [equipmentId]);
+    if (previousEquipment) {
+      await refreshLowStockAlertForScope({
+        branchId: previousEquipment.branch_id,
+        categoryId: previousEquipment.category_id,
+        stockLocation: previousEquipment.stock_location,
+      });
+    }
     return res.json({ message: "Equipment deleted successfully." });
   } catch (error) {
     return res.status(500).json({ message: normalizeError(error) });
@@ -12915,40 +13524,6 @@ app.post("/api/requests", async (req, res) => {
 
     await createWorkflowStepsForRequest(result.insertId, requester, normalizedRequestType, effectiveTargetEmployeeUserId);
 
-    if (normalizedRequestType === "loss_theft" && sourceEquipmentId) {
-      const sourceEquipment = await getEquipmentDetails(Number(sourceEquipmentId));
-      if (sourceEquipment) {
-        await pool.query(
-          "UPDATE equipment SET status = 'lost' WHERE id = ?",
-          [Number(sourceEquipmentId)],
-        );
-        await pool.query(
-          `
-            INSERT INTO loss_theft_reports (
-              equipment_id,
-              employee_user_id,
-              report_type,
-              incident_note,
-              created_request_id
-            )
-            VALUES (?, ?, ?, ?, ?)
-          `,
-          [Number(sourceEquipmentId), Number(requesterId), normalizedReportType || "loss", normalizedNotes, result.insertId],
-        );
-        await logAssetLifecycle({
-          equipmentId: Number(sourceEquipmentId),
-          actorUserId: Number(requesterId),
-          eventType: "loss_theft_declared",
-          eventLabel: "Loss or theft declared",
-          eventNote: normalizedNotes || `${normalizedReportType || "loss"} reported through replacement workflow.`,
-          fromStatus: sourceEquipment.status,
-          toStatus: "lost",
-          relatedRecordType: "request",
-          relatedRecordId: result.insertId,
-        });
-      }
-    }
-
     const [firstStepRows] = await pool.query(
       `
         SELECT actor_user_id, step_label
@@ -13072,7 +13647,7 @@ app.post("/api/requests/:id/approve", async (req, res) => {
     }
 
     const [requestRows] = await pool.query(
-      "SELECT id, requester_id, request_status, request_type, category_id, booked_equipment_id, fulfillment_status FROM requests WHERE id = ? LIMIT 1",
+      "SELECT id, requester_id, request_status, request_type, report_type, notes, category_id, source_equipment_id, target_employee_user_id, booked_equipment_id, fulfillment_status FROM requests WHERE id = ? LIMIT 1",
       [requestId],
     );
 
@@ -13160,6 +13735,54 @@ app.post("/api/requests/:id/approve", async (req, res) => {
       `,
       [actor.id, note || null, currentStep.id],
     );
+
+    if (currentStep.step_key === "it_loss_theft_validation" && requestRows[0].source_equipment_id) {
+      const sourceEquipmentId = Number(requestRows[0].source_equipment_id);
+      const incidentStatus = requestRows[0].report_type === "theft" ? "theft" : "lost";
+      const sourceEquipment = await getEquipmentDetails(sourceEquipmentId);
+
+      if (!sourceEquipment) {
+        return res.status(404).json({ message: "The device linked to this loss or theft request was not found." });
+      }
+
+      await pool.query(
+        "UPDATE equipment SET status = ? WHERE id = ?",
+        [incidentStatus, sourceEquipmentId],
+      );
+      await syncInventoryForEquipmentIds([sourceEquipmentId]);
+
+      await pool.query(
+        `
+          INSERT INTO loss_theft_reports (
+            equipment_id,
+            employee_user_id,
+            report_type,
+            incident_note,
+            created_request_id
+          )
+          VALUES (?, ?, ?, ?, ?)
+        `,
+        [
+          sourceEquipmentId,
+          Number(requestRows[0].target_employee_user_id || requestRows[0].requester_id),
+          incidentStatus === "theft" ? "theft" : "loss",
+          note || requestRows[0].notes || null,
+          requestId,
+        ],
+      );
+
+      await logAssetLifecycle({
+        equipmentId: sourceEquipmentId,
+        actorUserId: actor.id,
+        eventType: "loss_theft_approved",
+        eventLabel: incidentStatus === "theft" ? "Device marked as theft" : "Device marked as lost",
+        eventNote: note || requestRows[0].notes || "Loss or theft incident approved by IT support.",
+        fromStatus: sourceEquipment.status,
+        toStatus: incidentStatus,
+        relatedRecordType: "request",
+        relatedRecordId: requestId,
+      });
+    }
 
     const [nextStepRows] = await pool.query(
       `
@@ -13976,7 +14599,7 @@ app.post("/api/requests/:id/fulfill", async (req, res) => {
 
     const [requestRows] = await pool.query(
       `
-        SELECT id, requester_id, target_employee_user_id, category_id, request_status, booked_equipment_id, request_type, source_equipment_id
+        SELECT id, requester_id, target_employee_user_id, category_id, request_status, booked_equipment_id, request_type, report_type, source_equipment_id
         FROM requests
         WHERE id = ?
         LIMIT 1
@@ -14009,9 +14632,11 @@ app.post("/api/requests/:id/fulfill", async (req, res) => {
 
     let sourceEquipment = null;
     let sourceAssignment = null;
+    let sourceDisposition = null;
+    let sourceCondition = null;
 
-    if (requestRecord.request_type === "replacement" && requestRecord.source_equipment_id) {
-      if (!["available", "retired"].includes(normalizedReplacementDisposition || "")) {
+    if ((requestRecord.request_type === "replacement" || requestRecord.request_type === "loss_theft") && requestRecord.source_equipment_id) {
+      if (requestRecord.request_type === "replacement" && !["available", "retired"].includes(normalizedReplacementDisposition || "")) {
         return res.status(400).json({ message: "Choose whether the replaced device returns to stock or is disposed." });
       }
 
@@ -14041,6 +14666,12 @@ app.post("/api/requests/:id/fulfill", async (req, res) => {
       }
 
       sourceAssignment = sourceAssignmentRows[0];
+      sourceDisposition = requestRecord.request_type === "loss_theft"
+        ? (requestRecord.report_type === "theft" ? "theft" : "lost")
+        : (normalizedReplacementDisposition || "retired");
+      sourceCondition = requestRecord.request_type === "loss_theft"
+        ? `Reported ${sourceDisposition}`
+        : (normalizedReplacementConditionStatus || "Returned during replacement");
     }
 
     const [stepRows] = await pool.query(
@@ -14151,8 +14782,8 @@ app.post("/api/requests/:id/fulfill", async (req, res) => {
         actor.id,
         note || "Equipment issued to employee.",
         finalEquipmentId,
-        normalizedReplacementDisposition,
-        normalizedReplacementConditionStatus,
+        sourceDisposition,
+        sourceCondition,
         actor.id,
         requestId,
       ],
@@ -14199,11 +14830,11 @@ app.post("/api/requests/:id/fulfill", async (req, res) => {
       });
     }
 
-    if (requestRecord.request_type === "replacement" && requestRecord.source_equipment_id) {
+    if ((requestRecord.request_type === "replacement" || requestRecord.request_type === "loss_theft") && requestRecord.source_equipment_id) {
       const sourceEquipmentId = Number(requestRecord.source_equipment_id);
-      const sourceDisposition = normalizedReplacementDisposition || "retired";
-      const sourceCondition = normalizedReplacementConditionStatus || "Returned during replacement";
-      const replacementNote = note || `Replacement completed. Previous device marked ${sourceDisposition === "available" ? "returned to stock" : "disposed"}.`;
+      const replacementNote = requestRecord.request_type === "loss_theft"
+        ? (note || `Replacement completed after ${sourceDisposition === "theft" ? "theft" : "loss"} approval.`)
+        : (note || `Replacement completed. Previous device marked ${sourceDisposition === "available" ? "returned to stock" : "disposed"}.`);
 
       await pool.query(
         `
@@ -14272,8 +14903,8 @@ app.post("/api/requests/:id/fulfill", async (req, res) => {
       await logAssetLifecycle({
         equipmentId: sourceEquipmentId,
         actorUserId: actor.id,
-        eventType: "replacement_processed",
-        eventLabel: "Replaced equipment processed",
+        eventType: requestRecord.request_type === "loss_theft" ? "loss_theft_replacement_processed" : "replacement_processed",
+        eventLabel: requestRecord.request_type === "loss_theft" ? "Loss or theft replacement processed" : "Replaced equipment processed",
         eventNote: replacementNote,
         fromStatus: sourceEquipment?.status || null,
         toStatus: sourceDisposition,
@@ -14281,6 +14912,9 @@ app.post("/api/requests/:id/fulfill", async (req, res) => {
         relatedRecordId: requestId,
       });
     }
+    await syncInventoryForEquipmentIds(
+      [finalEquipmentId, requestRecord.source_equipment_id].filter((value) => Number(value) > 0),
+    );
 
     return res.json({ message: "Request fulfilled and equipment assigned successfully." });
   } catch (error) {
@@ -14962,6 +15596,7 @@ app.post("/api/returns/:id/it-review", async (req, res) => {
       );
 
       await pool.query("UPDATE equipment SET status = 'maintenance' WHERE id = ?", [returnRecord.equipment_id]);
+      await syncInventoryForEquipmentIds([returnRecord.equipment_id]);
       await logAssetLifecycle({
         equipmentId: returnRecord.equipment_id,
         actorUserId: actor.id,
@@ -15219,6 +15854,7 @@ app.post("/api/returns/:id/final-approve", async (req, res) => {
       "UPDATE equipment SET status = ? WHERE id = ?",
       [freshReturn.disposition || "available", freshReturn.equipment_id],
     );
+    await syncInventoryForEquipmentIds([freshReturn.equipment_id]);
     await pool.query(
       "UPDATE returns SET return_status = 'completed', processed_at = NOW() WHERE id = ?",
       [returnId],
@@ -15536,6 +16172,7 @@ app.post("/api/returns/:id/process", async (req, res) => {
       "UPDATE equipment SET status = ? WHERE id = ?",
       [disposition, returnRecord.equipment_id],
     );
+    await syncInventoryForEquipmentIds([returnRecord.equipment_id]);
     await logAssetLifecycle({
       equipmentId: returnRecord.equipment_id,
       actorUserId: actor.id,
@@ -15655,6 +16292,7 @@ app.post("/api/maintenance/:id/complete", async (req, res) => {
     }
 
     await pool.query("UPDATE equipment SET status = ? WHERE id = ?", [finalDisposition, maintenance.equipment_id]);
+    await syncInventoryForEquipmentIds([maintenance.equipment_id]);
     await logAssetLifecycle({
       equipmentId: maintenance.equipment_id,
       actorUserId: actor.id,

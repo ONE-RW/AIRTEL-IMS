@@ -123,6 +123,14 @@ select {
   display: block;
 }
 
+.field-helper-text {
+  display: block;
+  margin-top: 0.4rem;
+  font-size: 0.82rem;
+  color: #5b7086;
+  line-height: 1.4;
+}
+
 .simple-form input,
 .simple-form select,
 .simple-form textarea {

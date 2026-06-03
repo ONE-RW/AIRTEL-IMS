@@ -2,6 +2,13 @@ CREATE DATABASE IF NOT EXISTS airtel_global_ims;
 USE airtel_global_ims;
 
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS move_order_request_items;
+DROP TABLE IF EXISTS move_order_requests;
+DROP TABLE IF EXISTS replacement_ml_models;
+DROP TABLE IF EXISTS ml_recommendations;
+DROP TABLE IF EXISTS alerts;
+DROP TABLE IF EXISTS device_metrics;
+DROP TABLE IF EXISTS device_agents;
 DROP TABLE IF EXISTS auth_providers;
 DROP TABLE IF EXISTS loss_theft_reports;
 DROP TABLE IF EXISTS security_handover_reviews;
@@ -117,6 +124,9 @@ CREATE TABLE users (
   profile_image_url LONGTEXT NULL,
   employee_code VARCHAR(80),
   password_hash VARCHAR(255) NOT NULL,
+  auth_provider VARCHAR(80) NULL,
+  external_auth_id VARCHAR(255) NULL,
+  username_upn VARCHAR(255) NULL,
   role_id BIGINT NOT NULL,
   department_id BIGINT NULL,
   branch_id BIGINT NULL,
@@ -130,6 +140,9 @@ CREATE TABLE users (
   start_date DATE NULL,
   employee_grade VARCHAR(80) NULL,
   hrms_employee_id VARCHAR(120) NULL,
+  must_change_password TINYINT(1) NOT NULL DEFAULT 0,
+  employee_code_hash VARCHAR(64) NULL,
+  hrms_employee_id_hash VARCHAR(64) NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_users_role
@@ -191,7 +204,7 @@ CREATE TABLE equipment (
   location_id BIGINT NULL,
   vendor_name VARCHAR(150) NULL,
   model_name VARCHAR(150) NULL,
-  status ENUM('available', 'assigned', 'reserved', 'maintenance', 'retired', 'lost') DEFAULT 'available',
+  status ENUM('available', 'assigned', 'reserved', 'maintenance', 'retired', 'lost', 'theft') DEFAULT 'available',
   purchase_year INT NULL,
   purchase_date DATE,
   purchase_cost DECIMAL(15, 2) DEFAULT 0.00,
@@ -200,6 +213,7 @@ CREATE TABLE equipment (
   warranty_end_date DATE,
   lifespan_years INT NOT NULL DEFAULT 4,
   equipment_specs JSON NULL,
+  stock_location VARCHAR(40) NOT NULL DEFAULT 'it_stock',
   asset_type VARCHAR(80) NULL,
   base_configuration_name VARCHAR(120) NULL,
   base_configuration_grade VARCHAR(80) NULL,
@@ -318,6 +332,9 @@ CREATE TABLE returns (
   it_reviewed_at TIMESTAMP NULL,
   processed_at TIMESTAMP NULL,
   received_condition_comment TEXT NULL,
+  return_attachment_name VARCHAR(255) NULL,
+  return_attachment_type VARCHAR(180) NULL,
+  return_attachment_data LONGTEXT NULL,
   final_hrd_approval_status VARCHAR(20) NOT NULL DEFAULT 'pending',
   final_hrd_approved_at TIMESTAMP NULL,
   final_hrd_approved_by BIGINT NULL,
@@ -731,6 +748,61 @@ CREATE TABLE ml_recommendations (
     FOREIGN KEY (equipment_id) REFERENCES equipment(id),
   CONSTRAINT fk_ml_recommendations_metric
     FOREIGN KEY (metric_id) REFERENCES device_metrics(id)
+);
+
+CREATE TABLE replacement_ml_models (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  model_key VARCHAR(64) NOT NULL,
+  model_version VARCHAR(40) NOT NULL,
+  feature_names_json LONGTEXT NOT NULL,
+  weights_json LONGTEXT NOT NULL,
+  intercept DOUBLE NOT NULL DEFAULT 0,
+  metrics_json LONGTEXT NULL,
+  created_by_user_id BIGINT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_replacement_ml_key_created (model_key, created_at)
+);
+
+CREATE TABLE move_order_requests (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  request_number VARCHAR(40) NOT NULL,
+  requested_by_user_id BIGINT NOT NULL,
+  warehouse_user_id BIGINT NULL,
+  destination_branch_id BIGINT NULL,
+  status VARCHAR(30) NOT NULL DEFAULT 'pending',
+  receipt_status VARCHAR(40) NOT NULL DEFAULT 'pending',
+  reason VARCHAR(255) NULL,
+  note TEXT NULL,
+  reviewed_note TEXT NULL,
+  reviewed_at TIMESTAMP NULL,
+  received_confirmed_at TIMESTAMP NULL,
+  fulfilled_at TIMESTAMP NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_move_order_request_number (request_number),
+  CONSTRAINT fk_move_order_requested_by
+    FOREIGN KEY (requested_by_user_id) REFERENCES users(id),
+  CONSTRAINT fk_move_order_warehouse_user
+    FOREIGN KEY (warehouse_user_id) REFERENCES users(id),
+  CONSTRAINT fk_move_order_destination_branch
+    FOREIGN KEY (destination_branch_id) REFERENCES branches(id)
+);
+
+CREATE TABLE move_order_request_items (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  move_order_request_id BIGINT NOT NULL,
+  equipment_id BIGINT NULL,
+  requested_category_id BIGINT NULL,
+  requested_quantity INT NOT NULL DEFAULT 1,
+  item_note VARCHAR(255) NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_move_order_item_request
+    FOREIGN KEY (move_order_request_id) REFERENCES move_order_requests(id)
+    ON DELETE CASCADE,
+  CONSTRAINT fk_move_order_item_equipment
+    FOREIGN KEY (equipment_id) REFERENCES equipment(id),
+  CONSTRAINT fk_move_order_item_requested_category
+    FOREIGN KEY (requested_category_id) REFERENCES categories(id),
+  UNIQUE KEY uq_move_order_request_equipment (move_order_request_id, equipment_id)
 );
 
 CREATE TABLE password_reset_tokens (
