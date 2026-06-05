@@ -34,6 +34,11 @@ View my notebook with detailed steps here:
 [DataBase](https://github.com/ONE-RW/AIRTEL-IMS/tree/119cf1dc9c3e571e4cc64f521dad89e023c0850a/HRMS/backend)
 [Public](https://github.com/ONE-RW/AIRTEL-IMS/tree/b140555edbe4d5e8eae696945494b0f29e505250/HRMS/public)
 []()
+## System Architecture
+*   Client-Server architecture.*
+*   RESTful APIs.*
+*   Separation of concerns between IMS and HRMS.*
+*   Secure data synchronization between systems.*
 ## Deployment Cost
 | Item | Cost |
 |----|----|
