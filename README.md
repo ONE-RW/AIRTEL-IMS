@@ -3,6 +3,7 @@
 ## Description
 The Inventory Management System (IMS) is a full-stack web application designed to manage, track, and monitor end-user equipment inventory in real time. The system improves visibility, accountability, and efficiency in IT asset management. The system was developed to solve challenges caused by manual inventory tracking, including losses, delays, and a lack of accountability. 
 This project is based on a real-world case study for Aitel IT inventory operations.
+
 ![The Challenge Image](https://github.com/ONE-RW/AIRTEL-IMS/blob/1a18c51cf6b223d43503944d1536b50968a7c4ea/Images/Challenge.png)
 ## Motivation
 Organizations using manual inventory systems face:
@@ -11,6 +12,7 @@ Organizations using manual inventory systems face:
 - Poor accountability
   
 IMS eliminates these issues by providing a centralized, automated solution.
+
 ![Solution Image](https://github.com/ONE-RW/AIRTEL-IMS/blob/57598d5c56745febcfa5a9aea9293a42dc8ea374/Images/Solution.png)
 ## System Architecture
 - Client–Server architecture
@@ -23,7 +25,11 @@ IMS eliminates these issues by providing a centralized, automated solution.
 | Frontend | React.js, Vite, CSS |
 | Backend | Node.js, Express.js |
 | Database | MySQL |
+
 ![Solution Design](https://github.com/ONE-RW/AIRTEL-IMS/blob/30107ea4ccf73f74c5d76a242024d5e999ff3782/Images/Design.png)
+
+View my notebook with detailed steps here:
+[]()
 ## Deployment Cost
 | Item | Cost |
 |----|----|
