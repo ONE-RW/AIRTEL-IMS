@@ -23,7 +23,7 @@ IMS eliminates these issues by providing a centralized, automated solution.
 | Frontend | React.js, Vite, CSS |
 | Backend | Node.js, Express.js |
 | Database | MySQL |
-
+![Solution Design](https://github.com/ONE-RW/AIRTEL-IMS/blob/30107ea4ccf73f74c5d76a242024d5e999ff3782/Images/Design.png)
 ## Deployment Cost
 | Item | Cost |
 |----|----|
