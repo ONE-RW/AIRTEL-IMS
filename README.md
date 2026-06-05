@@ -30,8 +30,9 @@ IMS eliminates these issues by providing a centralized, automated solution.
 
 View my notebook with detailed steps here:
 
-[BankEnd](https://github.com/ONE-RW/AIRTEL-IMS/tree/119cf1dc9c3e571e4cc64f521dad89e023c0850a/HRMS/backend)
+[BackEnd](https://github.com/ONE-RW/AIRTEL-IMS/tree/119cf1dc9c3e571e4cc64f521dad89e023c0850a/HRMS/backend)
 [DataBase](https://github.com/ONE-RW/AIRTEL-IMS/tree/119cf1dc9c3e571e4cc64f521dad89e023c0850a/HRMS/backend)
+[Public](https://github.com/ONE-RW/AIRTEL-IMS/tree/b140555edbe4d5e8eae696945494b0f29e505250/HRMS/public)
 []()
 ## Deployment Cost
 | Item | Cost |
