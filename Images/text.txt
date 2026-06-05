@@ -1,0 +1,14 @@
+IMS-Project/
+│
+├── screenshots/
+│   ├── login.png
+│   ├── dashboard.png
+│   ├── inventory-list.png
+│   ├── add-equipment.png
+│   ├── tracking.png
+│   └── system-design.png
+│
+├── README.md
+├── frontend/
+├── backend/
+└── database/
