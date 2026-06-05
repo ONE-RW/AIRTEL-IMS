@@ -62,7 +62,8 @@ View my notebook with detailed steps here:
 - Mobile application
 - Country-level expansion
 - Advanced analytics and reporting
-
+## Conclusion
+The IMS-HRMS integrated solution provides a robust, scalable, and efficient approach to managing IT equipment. By combining inventory tracking with employee data synchronization, the system ensures accountability, accuracy, and long-term sustainability.
 ## Contributors
 - MUHAYIMANA Chance  
 - NIYONIZERA Adeline  
