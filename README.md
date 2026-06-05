@@ -1,8 +1,9 @@
 # Inventory Management System (IMS)
-
+# Integrated with Humana Resource Management System(HRMS)
 ## Description
-The Inventory Management System (IMS) is a full-stack web application designed to manage, track, and monitor end-user equipment inventory in real time. The system improves visibility, accountability, and efficiency in IT asset management.
-
+The Inventory Management System (IMS) is a full-stack web application designed to manage, track, and monitor end-user equipment inventory in real time. The system improves visibility, accountability, and efficiency in IT asset management. The system was developed to solve challenges caused by manual inventory tracking, including losses, delays, and a lack of accountability. 
+This project is based on a real-world case study for Aitel IT inventory operations.
+![The Challenge Image]()
 ## Motivation
 Organizations using manual inventory systems face:
 - Equipment loss
