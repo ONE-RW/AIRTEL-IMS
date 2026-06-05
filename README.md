@@ -11,7 +11,7 @@ Organizations using manual inventory systems face:
 - Poor accountability
   
 IMS eliminates these issues by providing a centralized, automated solution.
-
+![Solution Image](https://github.com/ONE-RW/AIRTEL-IMS/blob/57598d5c56745febcfa5a9aea9293a42dc8ea374/Images/Solution.png)
 ## System Architecture
 - Client–Server architecture
 - RESTful API backend
